@@ -171,14 +171,6 @@ sentinel会负责monitor你指定的master，并且自动发现该master的slave
 2385         if (retval == REDIS_OK) ri->pending_commands++;
 
 2038 void sentinelInfoReplyCallback(redisAsyncContext *c, void *reply, void *privdata) {
-2039     sentinelRedisInstance *ri = c->data;
-2040     redisReply *r;
-2041     REDIS_NOTUSED(privdata);
-2042
-2043     if (ri) ri->pending_commands--;
-2044     if (!reply || !ri) return;
-2045     r = reply;
-2046
 2047     if (r->type == REDIS_REPLY_STRING) {
 2048         sentinelRefreshInstanceInfo(ri,r->str);
 2049     }
