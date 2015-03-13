@@ -269,7 +269,8 @@ struct sentinelRedisInstance那个代码段有一些注释有错误，
 	
 	sentinel parallel-syncs resque 5
 	
-	以上是两组sentinel配置的实例。
+	以上是两组sentinel配置的实例。没什么特别的，如果是在config中指定这种方式的话，
+    请保证sentinel monitor mymaster写在其他该master的配置前面。
 	
 - monitor那一行，后面的几个参数是master_name, ip, port, quorum.
 	

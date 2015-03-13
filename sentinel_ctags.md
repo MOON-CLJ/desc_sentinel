@@ -48,7 +48,7 @@ ctags -nux src/sentinel.c
 
 - [ ] SENTINEL_DEFAULT_DOWN_AFTER macro        76 src/sentinel.c   #define SENTINEL_DEFAULT_DOWN_AFTER 30000
 
-- [ ] SENTINEL_HELLO_CHANNEL macro        77 src/sentinel.c   #define SENTINEL_HELLO_CHANNEL "__sentinel__:hello"
+- [x] SENTINEL_HELLO_CHANNEL macro        77 src/sentinel.c   #define SENTINEL_HELLO_CHANNEL "__sentinel__:hello"
 
 - [ ] SENTINEL_TILT_TRIGGER macro        78 src/sentinel.c   #define SENTINEL_TILT_TRIGGER 2000
 
@@ -68,7 +68,7 @@ ctags -nux src/sentinel.c
 
 - [x] SENTINEL_ELECTION_TIMEOUT macro        86 src/sentinel.c   #define SENTINEL_ELECTION_TIMEOUT 10000
 
-- [ ] SENTINEL_MAX_DESYNC macro        87 src/sentinel.c   #define SENTINEL_MAX_DESYNC 1000
+- [x] SENTINEL_MAX_DESYNC macro        87 src/sentinel.c   #define SENTINEL_MAX_DESYNC 1000
 
 - [x] SENTINEL_FAILOVER_STATE_NONE macro        90 src/sentinel.c   #define SENTINEL_FAILOVER_STATE_NONE 0 /* No failover in progress. */
 
@@ -132,7 +132,7 @@ ctags -nux src/sentinel.c
 
 - [x] pc_conn_time     member      128 src/sentinel.c   mstime_t pc_conn_time; /* pc connection time. */
 
-- [ ] pc_last_activity member      129 src/sentinel.c   mstime_t pc_last_activity; /* Last time we received any message. */
+- [x] pc_last_activity member      129 src/sentinel.c   mstime_t pc_last_activity; /* Last time we received any message. */
 
 - [x] last_avail_time  member      130 src/sentinel.c   mstime_t last_avail_time; /* Last time the instance replied to ping with
 
@@ -140,9 +140,9 @@ ctags -nux src/sentinel.c
 
 - [x] last_pong_time   member      136 src/sentinel.c   mstime_t last_pong_time; /* Last time the instance replied to ping,
 
-- [ ] last_pub_time    member      139 src/sentinel.c   mstime_t last_pub_time; /* Last time we sent hello via Pub/Sub. */
+- [x] last_pub_time    member      139 src/sentinel.c   mstime_t last_pub_time; /* Last time we sent hello via Pub/Sub. */
 
-- [ ] last_hello_time  member      140 src/sentinel.c   mstime_t last_hello_time; /* Only used if SRI_SENTINEL is set. Last time
+- [x] last_hello_time  member      140 src/sentinel.c   mstime_t last_hello_time; /* Only used if SRI_SENTINEL is set. Last time
 
 - [x] last_master_down_reply_time member      143 src/sentinel.c   mstime_t last_master_down_reply_time; /* Time of last reply to
 
@@ -202,7 +202,7 @@ ctags -nux src/sentinel.c
 
 - [x] failover_delay_logged member      186 src/sentinel.c   mstime_t failover_delay_logged; /* For what failover_start_time value we
 
-- [ ] promoted_slave   member      188 src/sentinel.c   struct sentinelRedisInstance *promoted_slave; /* Promoted slave instance. */
+- [x] promoted_slave   member      188 src/sentinel.c   struct sentinelRedisInstance *promoted_slave; /* Promoted slave instance. */
 
 - [ ] notification_script member      191 src/sentinel.c   char *notification_script;
 
@@ -284,11 +284,11 @@ ctags -nux src/sentinel.c
 
 - [ ] leaderVotesDictType variable    373 src/sentinel.c   dictType leaderVotesDictType = {
 
-- [ ] sentinelcmds     variable    390 src/sentinel.c   struct redisCommand sentinelcmds[] = {
+- [x] sentinelcmds     variable    390 src/sentinel.c   struct redisCommand sentinelcmds[] = {
 
 - [ ] initSentinelConfig function    405 src/sentinel.c   void initSentinelConfig(void) {
 
-- [ ] initSentinel     function    410 src/sentinel.c   void initSentinel(void) {
+- [x] initSentinel     function    410 src/sentinel.c   void initSentinel(void) {
 
 - [ ] sentinelIsRunning function    438 src/sentinel.c   void sentinelIsRunning(void) {
 
@@ -332,7 +332,7 @@ ctags -nux src/sentinel.c
 
 - [ ] sentinelRedisInstanceTypeStr function   1044 src/sentinel.c   const char *sentinelRedisInstanceTypeStr(sentinelRedisInstance *ri) {
 
-- [ ] removeMatchingSentinelsFromMaster function   1068 src/sentinel.c   int removeMatchingSentinelsFromMaster(sentinelRedisInstance *master, char *ip, int port, char *runid) {
+- [x] removeMatchingSentinelsFromMaster function   1068 src/sentinel.c   int removeMatchingSentinelsFromMaster(sentinelRedisInstance *master, char *ip, int port, char *runid) {
 
 - [x] getSentinelRedisInstanceByAddrAndRunID function   1094 src/sentinel.c   sentinelRedisInstance *getSentinelRedisInstanceByAddrAndRunID(dict *instances, char *ip, int port, char *runid) {
 
@@ -352,7 +352,7 @@ ctags -nux src/sentinel.c
 
 - [x] sentinelRedisInstanceNoDownFor function   1287 src/sentinel.c   int sentinelRedisInstanceNoDownFor(sentinelRedisInstance *ri, mstime_t ms) {
 
-- [ ] sentinelGetCurrentMasterAddress function   1298 src/sentinel.c   sentinelAddr *sentinelGetCurrentMasterAddress(sentinelRedisInstance *master) {
+- [x] sentinelGetCurrentMasterAddress function   1298 src/sentinel.c   sentinelAddr *sentinelGetCurrentMasterAddress(sentinelRedisInstance *master) {
 
 - [x] sentinelPropagateDownAfterPeriod function   1316 src/sentinel.c   void sentinelPropagateDownAfterPeriod(sentinelRedisInstance *master) {
 
@@ -386,17 +386,17 @@ ctags -nux src/sentinel.c
 
 - [x] sentinelPingReplyCallback function   2051 src/sentinel.c   void sentinelPingReplyCallback(redisAsyncContext *c, void *reply, void *privdata) {
 
-- [ ] sentinelPublishReplyCallback function   2090 src/sentinel.c   void sentinelPublishReplyCallback(redisAsyncContext *c, void *reply, void *privdata) {
+- [x] sentinelPublishReplyCallback function   2090 src/sentinel.c   void sentinelPublishReplyCallback(redisAsyncContext *c, void *reply, void *privdata) {
 
-- [ ] sentinelProcessHelloMessage function   2110 src/sentinel.c   void sentinelProcessHelloMessage(char *hello, int hello_len) {
+- [x] sentinelProcessHelloMessage function   2110 src/sentinel.c   void sentinelProcessHelloMessage(char *hello, int hello_len) {
 
-- [ ] sentinelReceiveHelloMessages function   2200 src/sentinel.c   void sentinelReceiveHelloMessages(redisAsyncContext *c, void *reply, void *privdata) {
+- [x] sentinelReceiveHelloMessages function   2200 src/sentinel.c   void sentinelReceiveHelloMessages(redisAsyncContext *c, void *reply, void *privdata) {
 
-- [ ] sentinelSendHello function   2239 src/sentinel.c   int sentinelSendHello(sentinelRedisInstance *ri) {
+- [x] sentinelSendHello function   2239 src/sentinel.c   int sentinelSendHello(sentinelRedisInstance *ri) {
 
-- [ ] sentinelForceHelloUpdateDictOfRedisInstances function   2281 src/sentinel.c   void sentinelForceHelloUpdateDictOfRedisInstances(dict *instances) {
+- [x] sentinelForceHelloUpdateDictOfRedisInstances function   2281 src/sentinel.c   void sentinelForceHelloUpdateDictOfRedisInstances(dict *instances) {
 
-- [ ] sentinelForceHelloUpdateForMaster function   2302 src/sentinel.c   int sentinelForceHelloUpdateForMaster(sentinelRedisInstance *master) {
+- [x] sentinelForceHelloUpdateForMaster function   2302 src/sentinel.c   int sentinelForceHelloUpdateForMaster(sentinelRedisInstance *master) {
 
 - [x] sentinelSendPing function   2316 src/sentinel.c   int sentinelSendPing(sentinelRedisInstance *ri) {
 
@@ -418,7 +418,7 @@ ctags -nux src/sentinel.c
 
 - [ ] sentinelSetCommand function   2871 src/sentinel.c   void sentinelSetCommand(redisClient *c) {
 
-- [ ] sentinelPublishCommand function   2964 src/sentinel.c   void sentinelPublishCommand(redisClient *c) {
+- [x] sentinelPublishCommand function   2964 src/sentinel.c   void sentinelPublishCommand(redisClient *c) {
 
 - [x] sentinelCheckSubjectivelyDown function   2976 src/sentinel.c   void sentinelCheckSubjectivelyDown(sentinelRedisInstance *ri) {
 
@@ -430,17 +430,17 @@ ctags -nux src/sentinel.c
 
 - [x] sentinelAskMasterStateToOtherSentinels function   3124 src/sentinel.c   void sentinelAskMasterStateToOtherSentinels(sentinelRedisInstance *master, int flags) {
 
-- [ ] sentinelVoteLeader function   3174 src/sentinel.c   char *sentinelVoteLeader(sentinelRedisInstance *master, uint64_t req_epoch, char *req_runid, uint64_t *leader_epoch) {
+- [x] sentinelVoteLeader function   3174 src/sentinel.c   char *sentinelVoteLeader(sentinelRedisInstance *master, uint64_t req_epoch, char *req_runid, uint64_t *leader_epoch) {
 
-- [ ] sentinelLeader   struct     3201 src/sentinel.c   struct sentinelLeader {
+- [x] sentinelLeader   struct     3201 src/sentinel.c   struct sentinelLeader {
 
-- [ ] runid            member     3202 src/sentinel.c   char *runid;
+- [x] runid            member     3202 src/sentinel.c   char *runid;
 
-- [ ] votes            member     3203 src/sentinel.c   unsigned long votes;
+- [x] votes            member     3203 src/sentinel.c   unsigned long votes;
 
-- [ ] sentinelLeaderIncr function   3208 src/sentinel.c   int sentinelLeaderIncr(dict *counters, char *runid) {
+- [x] sentinelLeaderIncr function   3208 src/sentinel.c   int sentinelLeaderIncr(dict *counters, char *runid) {
 
-- [ ] sentinelGetLeader function   3230 src/sentinel.c   char *sentinelGetLeader(sentinelRedisInstance *master, uint64_t epoch) {
+- [x] sentinelGetLeader function   3230 src/sentinel.c   char *sentinelGetLeader(sentinelRedisInstance *master, uint64_t epoch) {
 
 - [x] sentinelSendSlaveOf function   3305 src/sentinel.c   int sentinelSendSlaveOf(sentinelRedisInstance *ri, char *host, int port) {
 
