@@ -26,7 +26,7 @@ ctags -nux src/sentinel.c
 
 - [x] SRI_FAILOVER_IN_PROGRESS macro        62 src/sentinel.c   #define SRI_FAILOVER_IN_PROGRESS (1<<7) /* Failover is in progress for
 
-- [ ] SRI_PROMOTED     macro        64 src/sentinel.c   #define SRI_PROMOTED (1<<8) /* Slave selected for promotion. */
+- [x] SRI_PROMOTED     macro        64 src/sentinel.c   #define SRI_PROMOTED (1<<8) /* Slave selected for promotion. */
 
 - [x] SRI_RECONF_SENT  macro        65 src/sentinel.c   #define SRI_RECONF_SENT (1<<9) /* SLAVEOF <newmaster> sent. */
 
@@ -46,7 +46,7 @@ ctags -nux src/sentinel.c
 
 - [x] SENTINEL_PUBLISH_PERIOD macro        75 src/sentinel.c   #define SENTINEL_PUBLISH_PERIOD 2000
 
-- [ ] SENTINEL_DEFAULT_DOWN_AFTER macro        76 src/sentinel.c   #define SENTINEL_DEFAULT_DOWN_AFTER 30000
+- [x] SENTINEL_DEFAULT_DOWN_AFTER macro        76 src/sentinel.c   #define SENTINEL_DEFAULT_DOWN_AFTER 30000
 
 - [x] SENTINEL_HELLO_CHANNEL macro        77 src/sentinel.c   #define SENTINEL_HELLO_CHANNEL "__sentinel__:hello"
 
@@ -58,7 +58,7 @@ ctags -nux src/sentinel.c
 
 - [x] SENTINEL_SLAVE_RECONF_TIMEOUT macro        81 src/sentinel.c   #define SENTINEL_SLAVE_RECONF_TIMEOUT 10000
 
-- [ ] SENTINEL_DEFAULT_PARALLEL_SYNCS macro        82 src/sentinel.c   #define SENTINEL_DEFAULT_PARALLEL_SYNCS 1
+- [x] SENTINEL_DEFAULT_PARALLEL_SYNCS macro        82 src/sentinel.c   #define SENTINEL_DEFAULT_PARALLEL_SYNCS 1
 
 - [x] SENTINEL_MIN_LINK_RECONNECT_PERIOD macro        83 src/sentinel.c   #define SENTINEL_MIN_LINK_RECONNECT_PERIOD 15000
 
@@ -118,7 +118,7 @@ ctags -nux src/sentinel.c
 
 - [x] runid            member      121 src/sentinel.c   char *runid; /* run ID of this instance. */
 
-- [ ] config_epoch     member      122 src/sentinel.c   uint64_t config_epoch; /* Configuration epoch. */
+- [x] config_epoch     member      122 src/sentinel.c   uint64_t config_epoch; /* Configuration epoch. */
 
 - [x] addr             member      123 src/sentinel.c   sentinelAddr *addr; /* Master host. */
 
@@ -186,17 +186,17 @@ ctags -nux src/sentinel.c
 
 - [x] slave_repl_offset member      174 src/sentinel.c   unsigned long long slave_repl_offset; /* Slave replication offset. */
 
-- [ ] leader           member      176 src/sentinel.c   char *leader; /* If this is a master instance, this is the runid of
+- [x] leader           member      176 src/sentinel.c   char *leader; /* If this is a master instance, this is the runid of
 
-- [ ] leader_epoch     member      180 src/sentinel.c   uint64_t leader_epoch; /* Epoch of the 'leader' field. */
+- [x] leader_epoch     member      180 src/sentinel.c   uint64_t leader_epoch; /* Epoch of the 'leader' field. */
 
-- [ ] failover_epoch   member      181 src/sentinel.c   uint64_t failover_epoch; /* Epoch of the currently started failover. */
+- [x] failover_epoch   member      181 src/sentinel.c   uint64_t failover_epoch; /* Epoch of the currently started failover. */
 
 - [x] failover_state   member      182 src/sentinel.c   int failover_state; /* See SENTINEL_FAILOVER_STATE_* defines. */
 
 - [x] failover_state_change_time member      183 src/sentinel.c   mstime_t failover_state_change_time;
 
-- [ ] failover_start_time member      184 src/sentinel.c   mstime_t failover_start_time; /* Last failover attempt start time. */
+- [x] failover_start_time member      184 src/sentinel.c   mstime_t failover_start_time; /* Last failover attempt start time. */
 
 - [x] failover_timeout member      185 src/sentinel.c   mstime_t failover_timeout; /* Max time to refresh failover state. */
 
@@ -214,7 +214,7 @@ ctags -nux src/sentinel.c
 
 - [x] sentinelState    struct      196 src/sentinel.c   struct sentinelState {
 
-- [ ] current_epoch    member      197 src/sentinel.c   uint64_t current_epoch; /* Current epoch. */
+- [x] current_epoch    member      197 src/sentinel.c   uint64_t current_epoch; /* Current epoch. */
 
 - [x] masters          member      198 src/sentinel.c   dict *masters; /* Dictionary of master sentinelRedisInstances.
 
@@ -344,7 +344,7 @@ ctags -nux src/sentinel.c
 
 - [x] SENTINEL_RESET_NO_SENTINELS macro      1163 src/sentinel.c   #define SENTINEL_RESET_NO_SENTINELS (1<<0)
 
-- [ ] sentinelResetMaster function   1164 src/sentinel.c   void sentinelResetMaster(sentinelRedisInstance *ri, int flags) {
+- [x] sentinelResetMaster function   1164 src/sentinel.c   void sentinelResetMaster(sentinelRedisInstance *ri, int flags) {
 
 - [ ] sentinelResetMastersByPattern function   1198 src/sentinel.c   int sentinelResetMastersByPattern(char *pattern, int flags) {
 
@@ -410,7 +410,7 @@ ctags -nux src/sentinel.c
 
 - [ ] sentinelGetMasterByNameOrReplyError function   2604 src/sentinel.c   sentinelRedisInstance *sentinelGetMasterByNameOrReplyError(redisClient *c,
 
-- [ ] sentinelCommand  function   2617 src/sentinel.c   void sentinelCommand(redisClient *c) {
+- [x] sentinelCommand  function   2617 src/sentinel.c   void sentinelCommand(redisClient *c) {
 
 - [ ] sentinelInfoCommand function   2792 src/sentinel.c   void sentinelInfoCommand(redisClient *c) {
 

@@ -126,6 +126,11 @@ sentinel会负责monitor你指定的master，并且自动发现该master的slave
 
 1333 /* ============================ Config handling ============================= */
 1334 char *sentinelHandleConfiguration(char **argv, int argc) {
+1337     if (!strcasecmp(argv[0],"monitor") && argc == 5) {
+1338         /* monitor <name> <host> <port> <quorum> */
+1339         int quorum = atoi(argv[4]);
+1340
+1341         if (quorum <= 0) return "Quorum must be 1 or greater.";
 1342         if (createSentinelRedisInstance(argv[1],SRI_MASTER,argv[2],
 1343                                         atoi(argv[3]),quorum,NULL) == NULL)
 ```
@@ -244,6 +249,7 @@ struct sentinelRedisInstance那个代码段有一些注释有错误，
 - *master，slave或者senitinel的sentinelRedisInstance都有,而不是只有slave有。
   	
 ```
+/* src/sentinel.c */
 896 sentinelRedisInstance *createSentinelRedisInstance(char *name, int flags, char *hostname, int port, int quorum, sentinelRedisInstance *master) {
 902     redisAssert(flags & (SRI_MASTER|SRI_SLAVE|SRI_SENTINEL));
 903     redisAssert((flags & SRI_MASTER) || master != NULL);
