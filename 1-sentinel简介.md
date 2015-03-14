@@ -12,16 +12,17 @@ sentinel的启动方式是redis-sentinel /path/to/sentinel.conf或者redis-serve
 
 vagrant@vagrant ~/d/redis-2.8.19> make V=s -n | grep "redis-server"
 
-cc   -g -ggdb -rdynamic -o redis-server adlist.o ae.o anet.o dict.o redis.o sds.o zmalloc.o lzf_c.o lzf_d.o pqsort.o zipmap.o sha1.o ziplist.o release.o networking.o util.o object.o db.o replication.o rdb.o t_string.o t_list.o t_set.o t_zset.o t_hash.o config.o aof.o pubsub.o multi.o debug.o sort.o intset.o syncio.o migrate.o endianconv.o slowlog.o scripting.o bio.o rio.o rand.o memtest.o crc64.o bitops.o sentinel.o notify.o setproctitle.o hyperloglog.o latency.o sparkline.o ../deps/hiredis/libhiredis.a ../deps/lua/src/liblua.a -lm -pthread ../deps/jemalloc/lib/libjemalloc.a -ldl
+cc -g -ggdb -rdynamic -o redis-server adlist.o ae.o anet.o dict.o redis.o sds.o zmalloc.o lzf_c.o lzf_d.o pqsort.o zipmap.o sha1.o ziplist.o release.o networking.o util.o object.o db.o replication.o rdb.o t_string.o t_list.o t_set.o t_zset.o t_hash.o config.o aof.o pubsub.o multi.o debug.o sort.o intset.o syncio.o migrate.o endianconv.o slowlog.o scripting.o bio.o rio.o rand.o memtest.o crc64.o bitops.o sentinel.o notify.o setproctitle.o hyperloglog.o latency.o sparkline.o ../deps/hiredis/libhiredis.a ../deps/lua/src/liblua.a -lm -pthread ../deps/jemalloc/lib/libjemalloc.a -ldl
 
 install redis-server redis-sentinel
-    
+
 vagrant@vagrant ~/d/redis-2.8.19> which install
-    
+
 /usr/bin/install
-    
-可以看出来redis-sentinel和redis-server实际上是同一个binary文件，只是根据配置不同，会按照不同的方式启动。
-    
+
+可以看出来redis-sentinel和redis-server实际上是同一个binary文件，
+只是根据配置不同，会按照不同的方式启动。
+
 ```
 /* src/redis.c */
 1831     /* Create the serverCron() time event, that's our main way to process
@@ -30,13 +31,13 @@ vagrant@vagrant ~/d/redis-2.8.19> which install
 1834         redisPanic("Can't create the serverCron time event.");
 1835         exit(1);
 1836     }
-    
+
 1063 int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
 1242     /* Run the Sentinel timer if we are in sentinel mode. */
 1243     run_with_period(100) {
 1244         if (server.sentinel_mode) sentinelTimer();
 1245     }
-    
+
 3542 /* Returns 1 if there is --sentinel among the arguments or if
 3543  * argv[0] is exactly "redis-sentinel". */
 3544 int checkForSentinelMode(int argc, char **argv) {
@@ -50,27 +51,38 @@ vagrant@vagrant ~/d/redis-2.8.19> which install
 3688 int main(int argc, char **argv) {
 3727     server.sentinel_mode = checkForSentinelMode(argc,argv);
 ```
-    
-sentinelTimer就是整个sentinel逻辑的入口，随着redis的backgroud任务定期执行。看sentinel的代码也很容易，几乎所有的sentinel相关逻辑全在src/sentinel.c里面。sentinelTimer是这个文件的最后一个func。
-    
+
+sentinelTimer就是整个sentinel逻辑的入口，随着redis server的backgroud任务定期执行。
+看sentinel的代码也很容易，几乎所有的sentinel相关逻辑全在src/sentinel.c里面。
+sentinelTimer是src/sentinel.c的最后一个func。
+
 ```
 /* src/sentinel.c */
 4010 void sentinelTimer(void) {
 ```
-    
+
 ### **sentinel的用途**
 ---------------------
 
-sentinel会负责monitor你指定的master，并且自动发现该master的slave以及其他也在monitor该master的sentinel。sentinel是p2p结构，所以大概的拓扑结构就是一组sentinel监控一批redis instances。
+sentinel会负责monitor你指定的master，并且自动发现该master的slave以及其他也在monitor该master的sentinel。
+sentinel是p2p结构，所以大概的拓扑结构就是一组sentinel instances监控一批redis instances。
 
-值得注意的是，sentinel会通过已经monitor的master发现slave和sentinel，但是并不会通过其他sentinel发现更多的master，是的，其他sentinel会pubsub自己的监控的所有masters的消息给当前sentinel，但是当前sentinel遇到未知的master，会直接忽略相关消息。也就是说master信息是不会通过广播机制传递的。
+**值得注意的是，sentinel知晓由我们指定的各个master之后，会通过两种不同的方式去分别发现
+这些属于这些master的slave和一个master下除了当前sentinel之外的其他也在同时monitor该master的其他sentinel，
+但是并不会通过与其他sentinel之间的渠道或者更多的其他的渠道去发现更多的master，
+不可否认的是，其他sentinel会pubsub自己监控的所有masters的消息给当前sentinel，
+但是当前sentinel收到这些消息后，发现遇到了未知的master，会直接忽略相关消息, 或者回复没有建设性的意见。
+也就是说master信息是不会通过广播机制传递的, sentinel monitor的master集合并不会自己增长。
 
-如果sentinel从收集来的信息判断master表现得有异常，sentinel就会自动从该master的slave中选一个提升为新的master，一次failover是由一个sentinel来主导的，行动之前需要获得大多数sentinel的认同。
+如果sentinel从收集来的信息判断master表现得有异常，sentinel就会自动从该master的slave中选一个提升为新的master，
+一次failover是由这组sentinel中的一个来主导的，行动之前需要获得组内大多数sentinel的认同。
 
-另外，sentinel是集群部署的，一个sentinel可以说是基本不能体现出sentinel的设计，也正是由于这点，sentinel允许大多数都还健在的情况下，down掉一部分节点。
+另外，sentinel是集群部署的，一个sentinel可以说是基本不能体现出sentinel的设计，
+集群中的这些sentinel是对等的,即每个sentinel的担当是一样的。
+也正是由于这点，sentinel允许大多数都还健在的情况下，down掉一部分节点。
 
-**sentinel最重要的数据结构**
--------------------------
+### **sentinel最重要的数据结构**
+--------------------------------
 
 ```
 /* src/sentinel.c */
@@ -80,16 +92,14 @@ sentinel会负责monitor你指定的master，并且自动发现该master的slave
 199     dict *masters;      /* Dictionary of master sentinelRedisInstances.
 200                            Key is the instance name, value is the
 201                            sentinelRedisInstance structure pointer. */
-207     char *announce_ip;      /* IP addr that is gossiped to other sentinels if
-208                                not NULL. */
-209     int announce_port;      /* Port that is gossiped to other sentinels if
-210                                non zero. */
 211 } sentinel;
 ```
-这是一个global的struct，一个redis sentinel进程中只initialize一个这样的struct，redis本身又不是多线程的。
 
-可以看到这个全局唯一的struct里面有一个保存了所有master struct的pointer的dict，key就是我们指定的master的name，value就是指针。
-        
+一个redis sentinel进程中只initialize一个这样的global struct，redis本身又不是多线程的。
+
+可以看到这个全局唯一的sentinel struct里面有一个保存了
+包含管辖下的所有master struct的pointer的dict，key就是我们指定的master的name，value就是ptr。
+
 ```
 /* src/sentinel.c */
 118 typedef struct sentinelRedisInstance {
@@ -105,7 +115,7 @@ sentinel会负责monitor你指定的master，并且自动发现该master的slave
 166     /* Slave specific. */
 170     struct sentinelRedisInstance *master; /* Master instance if it's slave. */
 194 } sentinelRedisInstance;
-      
+
 896 sentinelRedisInstance *createSentinelRedisInstance(char *name, int flags, char *hostname, int port, int quorum, sentinelRedisInstance *master) {
 919     if (flags & SRI_MASTER) table = sentinel.masters;
 920     else if (flags & SRI_SLAVE) table = master->slaves;
@@ -113,11 +123,19 @@ sentinel会负责monitor你指定的master，并且自动发现该master的slave
 992     /* Add into the right table. */
 993     dictAdd(table, ri->name, ri);
 ```
-    
-可以看出来，sentinelRedisInstance struct可以表达master、slave、sentinel三种角色，在sentinel的struct里，每个master都有这样一个sentinelRedisInstance struct，这个sentinelRedisInstance struct又有该master的所有slaves的指针dict，也有monitor该master的other sentinels的指针dict。对于每个slave或者sentinel的sentinelRedisInstance struct里又有相关的那个master struct的指针。
-    
+
+可以看出来，sentinelRedisInstance struct可以表达master、slave、sentinel三种角色，
+在上述提到的那个global的sentinel的struct里，masters那个dict里每一个value都指向
+这样一个master role的sentinelRedisInstance struct的pointer，
+而这样一个master role的sentinelRedisInstance struct里又有dict *sentinels和dict *slaves
+这样两个dict，slaves这个dict的value包含该master的所有slaves的指针，sentinels这个
+dict里包含有moniter该master的所有other sentinels的指针。而这些指针进一步指向
+slave role或者sentinel role的sentinelRedisInstance struct.
+而对于每个slave role或者sentinel role的sentinelRedisInstance struct里的*master又是
+所属的那个master sentinelRedisInstance struct的指针。
+
 - 去填充这个sentinel.masters这个dict的地方在列举如下：
-    
+
 ```
 /* src/sentinel.c */
 2628 void sentinelCommand(redisClient *c) {
