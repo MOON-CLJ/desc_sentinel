@@ -4,22 +4,24 @@
 ### **sentinel是什么**
 ---------------------
 
-sentinel是redis官方自2.8版本以来的一个auto failover的方案，auto failover就是master down掉了，自动在其slave里面选一个出来作为新的master。
-	
+sentinel是redis官方自2.8版本以来的一个auto failover的方案，
+auto failover就是master down掉了，自动在其slave里面选一个出来作为新的master,
+目标当然是希望能够让redis server能够提供接近于zero downtime的数据服务。
+
 sentinel的启动方式是redis-sentinel /path/to/sentinel.conf或者redis-server /path/to/sentinel.conf --sentinel。
-	
+
 vagrant@vagrant ~/d/redis-2.8.19> make V=s -n | grep "redis-server"
-	
+
 cc   -g -ggdb -rdynamic -o redis-server adlist.o ae.o anet.o dict.o redis.o sds.o zmalloc.o lzf_c.o lzf_d.o pqsort.o zipmap.o sha1.o ziplist.o release.o networking.o util.o object.o db.o replication.o rdb.o t_string.o t_list.o t_set.o t_zset.o t_hash.o config.o aof.o pubsub.o multi.o debug.o sort.o intset.o syncio.o migrate.o endianconv.o slowlog.o scripting.o bio.o rio.o rand.o memtest.o crc64.o bitops.o sentinel.o notify.o setproctitle.o hyperloglog.o latency.o sparkline.o ../deps/hiredis/libhiredis.a ../deps/lua/src/liblua.a -lm -pthread ../deps/jemalloc/lib/libjemalloc.a -ldl
 
 install redis-server redis-sentinel
-	
+    
 vagrant@vagrant ~/d/redis-2.8.19> which install
-	
+    
 /usr/bin/install
-	
+    
 可以看出来redis-sentinel和redis-server实际上是同一个binary文件，只是根据配置不同，会按照不同的方式启动。
-	
+    
 ```
 /* src/redis.c */
 1831     /* Create the serverCron() time event, that's our main way to process
@@ -28,13 +30,13 @@ vagrant@vagrant ~/d/redis-2.8.19> which install
 1834         redisPanic("Can't create the serverCron time event.");
 1835         exit(1);
 1836     }
-	
+    
 1063 int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
 1242     /* Run the Sentinel timer if we are in sentinel mode. */
 1243     run_with_period(100) {
 1244         if (server.sentinel_mode) sentinelTimer();
 1245     }
-	
+    
 3542 /* Returns 1 if there is --sentinel among the arguments or if
 3543  * argv[0] is exactly "redis-sentinel". */
 3544 int checkForSentinelMode(int argc, char **argv) {
@@ -48,14 +50,14 @@ vagrant@vagrant ~/d/redis-2.8.19> which install
 3688 int main(int argc, char **argv) {
 3727     server.sentinel_mode = checkForSentinelMode(argc,argv);
 ```
-	
+    
 sentinelTimer就是整个sentinel逻辑的入口，随着redis的backgroud任务定期执行。看sentinel的代码也很容易，几乎所有的sentinel相关逻辑全在src/sentinel.c里面。sentinelTimer是这个文件的最后一个func。
-	
+    
 ```
 /* src/sentinel.c */
 4010 void sentinelTimer(void) {
 ```
-	
+    
 ### **sentinel的用途**
 ---------------------
 
@@ -87,7 +89,7 @@ sentinel会负责monitor你指定的master，并且自动发现该master的slave
 这是一个global的struct，一个redis sentinel进程中只initialize一个这样的struct，redis本身又不是多线程的。
 
 可以看到这个全局唯一的struct里面有一个保存了所有master struct的pointer的dict，key就是我们指定的master的name，value就是指针。
-		
+        
 ```
 /* src/sentinel.c */
 118 typedef struct sentinelRedisInstance {
@@ -103,7 +105,7 @@ sentinel会负责monitor你指定的master，并且自动发现该master的slave
 166     /* Slave specific. */
 170     struct sentinelRedisInstance *master; /* Master instance if it's slave. */
 194 } sentinelRedisInstance;
-  	
+      
 896 sentinelRedisInstance *createSentinelRedisInstance(char *name, int flags, char *hostname, int port, int quorum, sentinelRedisInstance *master) {
 919     if (flags & SRI_MASTER) table = sentinel.masters;
 920     else if (flags & SRI_SLAVE) table = master->slaves;
@@ -111,11 +113,11 @@ sentinel会负责monitor你指定的master，并且自动发现该master的slave
 992     /* Add into the right table. */
 993     dictAdd(table, ri->name, ri);
 ```
-	
+    
 可以看出来，sentinelRedisInstance struct可以表达master、slave、sentinel三种角色，在sentinel的struct里，每个master都有这样一个sentinelRedisInstance struct，这个sentinelRedisInstance struct又有该master的所有slaves的指针dict，也有monitor该master的other sentinels的指针dict。对于每个slave或者sentinel的sentinelRedisInstance struct里又有相关的那个master struct的指针。
-	
+    
 - 去填充这个sentinel.masters这个dict的地方在列举如下：
-	
+    
 ```
 /* src/sentinel.c */
 2628 void sentinelCommand(redisClient *c) {
@@ -136,7 +138,7 @@ sentinel会负责monitor你指定的master，并且自动发现该master的slave
 ```
 
 - 填充master->slaves这个dict的地方列举如下：
-	
+    
 ```
 /* src/sentinel.c */
 1226 int sentinelResetMasterAndChangeAddress(sentinelRedisInstance *master, char *ip, int port) {
@@ -181,9 +183,9 @@ sentinel会负责monitor你指定的master，并且自动发现该master的slave
 2049     }
 2050 }
 ```
-	
+    
 - 填充master->sentinels这个dict的地方列举如下：
-	
+    
 ```
 /* src/sentinel.c */
 1333 /* ============================ Config handling ============================= */
@@ -211,9 +213,9 @@ sentinel会负责monitor你指定的master，并且自动发现该master的slave
 2157                             token[0],port,master->quorum,master);
 ```
 有关sentinelProcessHelloMessage的细节后续章节会详细解释。
-	
+    
 struct sentinelRedisInstance那个代码段有一些注释有错误，
-	
+    
 ```
 /* src/sentinel.c */
 118 typedef struct sentinelRedisInstance {
@@ -225,7 +227,7 @@ struct sentinelRedisInstance那个代码段有一些注释有错误，
 ```
 
 - *name，并不是slave或者sentinel的createSentinelRedisInstance struct里都存的相应master的name，slave和sentinel有自己的直观的name。
-  	
+      
 ```
 /* src/sentinel.c */
 909     /* For slaves and sentinel we use ip:port as name. */
@@ -243,11 +245,11 @@ struct sentinelRedisInstance那个代码段有一些注释有错误，
 597            "[%s]:%d" : "%s:%d", ip, port);
 598 }
 ```
-  	
+      
 - *addr，每个sentinelRedisInstance都有，不只是master有。
-  	
+      
 - *master，slave或者senitinel的sentinelRedisInstance都有,而不是只有slave有。
-  	
+      
 ```
 /* src/sentinel.c */
 896 sentinelRedisInstance *createSentinelRedisInstance(char *name, int flags, char *hostname, int port, int quorum, sentinelRedisInstance *master) {
@@ -255,45 +257,45 @@ struct sentinelRedisInstance那个代码段有一些注释有错误，
 903     redisAssert((flags & SRI_MASTER) || master != NULL);
 969     ri->master = master;
 ```
-  	
+      
 ### **sentinel配置概览**
 -----------------------
 
 - sentinel monitor mymaster 127.0.0.1 6379 2
-	
-	sentinel down-after-milliseconds mymaster 60000 
-	
-	sentinel failover-timeout mymaster 180000 
-	
-	sentinel parallel-syncs mymaster 1 
-	
+    
+    sentinel down-after-milliseconds mymaster 60000 
+    
+    sentinel failover-timeout mymaster 180000 
+    
+    sentinel parallel-syncs mymaster 1 
+    
 - sentinel monitor resque 192.168.1.3 6380 4 
-	
-	sentinel down-after-milliseconds resque 10000
-	
-	sentinel failover-timeout resque 180000
-	
-	sentinel parallel-syncs resque 5
-	
-	以上是两组sentinel配置的实例。没什么特别的，如果是在config中指定这种方式的话，
+    
+    sentinel down-after-milliseconds resque 10000
+    
+    sentinel failover-timeout resque 180000
+    
+    sentinel parallel-syncs resque 5
+    
+    以上是两组sentinel配置的实例。没什么特别的，如果是在config中指定这种方式的话，
     请保证sentinel monitor mymaster写在其他该master的配置前面。
-	
+    
 - monitor那一行，后面的几个参数是master_name, ip, port, quorum.
-	
+    
 - master_name: 就是给master指定的一个唯一的name，唯一有两个意思，一是两个不同的master在这个sentinel不能用同样的名字，二是一组sentinel的两个sentinel之间对同一个master得用同样的名字，才能方便他们沟通（要是不一样，这个我还没试过）。与其说是指定给master的name，不如说是指定给一个master和他的所有slaves这样一组redis instance的name，指定的name并不会长期和一个ip port的redis instance绑定到一起，会failover嘛！。但是只有表达master的时候会直接用这个名字，比如
-	
-	master failover-test-bucket20 192.168.31.102 6399
-	
-	表达该master的slave和监控该master的所有sentinel时（sentinel的struct有一种隶属于master的struct的关系），则会用（只是举例，并没有用一个master举例）
-	
-	slave 192.168.31.100:6413 192.168.31.100 6413 @ failover-test-bucket48 192.168.31.101 6413
-	
-	sentinel 192.168.31.100:16379 192.168.31.100 16379 @ failover-test-bucket80 192.168.31.100 6429
-	
-	这样的表达方式，slave和sentinel直接的name是"%s:%s" % (ip, port)，但是注意"@"字符后面会列出来他所属的master的信息。
-	
+    
+    master failover-test-bucket20 192.168.31.102 6399
+    
+    表达该master的slave和监控该master的所有sentinel时（sentinel的struct有一种隶属于master的struct的关系），则会用（只是举例，并没有用一个master举例）
+    
+    slave 192.168.31.100:6413 192.168.31.100 6413 @ failover-test-bucket48 192.168.31.101 6413
+    
+    sentinel 192.168.31.100:16379 192.168.31.100 16379 @ failover-test-bucket80 192.168.31.100 6429
+    
+    这样的表达方式，slave和sentinel直接的name是"%s:%s" % (ip, port)，但是注意"@"字符后面会列出来他所属的master的信息。
+    
 - quorum：这个数字是配置给投票时统计大多数用的（这个说法很模糊，后续章节会详细解释）
-	
+    
 ```
 /* src/sentinel.c */
 3335     voters = dictSize(master->sentinels)+1; /* All the other sentinels and me. */
@@ -305,13 +307,13 @@ struct sentinelRedisInstance那个代码段有一些注释有错误，
 3384     if (winner && (max_votes < voters_quorum || max_votes < master->quorum))
 3385         winner = NULL;
 ```
-	
+    
 - down-after-milliseconds这一行，是指所有类型的实例进入sdown之前，需要down-after-milliseconds这么长时间没有响应，才能够判定。我们之前测试用的是3.1s，但是在网络异常或者sentinel本身负荷很高的情况下，3.1s其实少了一些，后续可能会增加到10s左右。
-	
+    
 - failover-timeout这一行是指failover超过这么长时间就会被判定为超时（不准确，后续章节会解释）。
-	
+    
 - parallel-syncs这一行跟我们关系不大，是用来failover之后限制同时reconf slave of 新的master的slave的个数的，而我们的用法是每个master只有一个slave。
-	
+    
 ```
 /* src/sentinel.c */
 3811     di = dictGetIterator(master->slaves);
