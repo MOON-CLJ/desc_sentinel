@@ -340,18 +340,18 @@ down-after-milliseconds这么长时间没有响应，才能够判定。
 新的master的slave的个数的，而我们的用法是每个master只有一个slave。
 所以此种用法下关系不大.
 
-```
-/* src/sentinel.c */
-3811     di = dictGetIterator(master->slaves);
-3812     while(in_progress < master->parallel_syncs &&
-3813           (de = dictNext(di)) != NULL)
-3814     {
-3815         sentinelRedisInstance *slave = dictGetVal(de);
-3839         /* Send SLAVEOF <new master>. */
-3840         retval = sentinelSendSlaveOf(slave,
-3841                 master->promoted_slave->addr->ip,
-3842                 master->promoted_slave->addr->port);
-3843         if (retval == REDIS_OK) {
-3847             in_progress++;
-3848         }
-```
+    ```
+    /* src/sentinel.c */
+    3811     di = dictGetIterator(master->slaves);
+    3812     while(in_progress < master->parallel_syncs &&
+    3813           (de = dictNext(di)) != NULL)
+    3814     {
+    3815         sentinelRedisInstance *slave = dictGetVal(de);
+    3839         /* Send SLAVEOF <new master>. */
+    3840         retval = sentinelSendSlaveOf(slave,
+    3841                 master->promoted_slave->addr->ip,
+    3842                 master->promoted_slave->addr->port);
+    3843         if (retval == REDIS_OK) {
+    3847             in_progress++;
+    3848         }
+    ```
