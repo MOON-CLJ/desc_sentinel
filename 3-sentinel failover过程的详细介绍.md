@@ -1,3 +1,6 @@
+## **sentinel failover过程的详细介绍**
+--------------------------------------
+
 ### **发现异常sdown，odown**
 --------------------------
 这一章节介绍sentinelHandleRedisInstance里的另外两个函数
