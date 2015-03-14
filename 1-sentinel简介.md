@@ -134,7 +134,7 @@ slave role或者sentinel role的sentinelRedisInstance struct.
 而对于每个slave role或者sentinel role的sentinelRedisInstance struct里的*master又是
 所属的那个master sentinelRedisInstance struct的指针。
 
-- 去填充这个sentinel.masters这个dict的地方在列举如下：
+- 去填充这个sentinel.masters这个dict的地方在列举如下,
 
 ```
 /* src/sentinel.c */
@@ -155,8 +155,8 @@ slave role或者sentinel role的sentinelRedisInstance struct.
 1343                                         atoi(argv[3]),quorum,NULL) == NULL)
 ```
 
-- 填充master->slaves这个dict的地方列举如下：
-    
+- 填充master->slaves这个dict的地方列举如下,
+
 ```
 /* src/sentinel.c */
 1226 int sentinelResetMasterAndChangeAddress(sentinelRedisInstance *master, char *ip, int port) {
@@ -201,9 +201,9 @@ slave role或者sentinel role的sentinelRedisInstance struct.
 2049     }
 2050 }
 ```
-    
-- 填充master->sentinels这个dict的地方列举如下：
-    
+
+- 填充master->sentinels这个dict的地方列举如下,
+
 ```
 /* src/sentinel.c */
 1333 /* ============================ Config handling ============================= */
@@ -230,10 +230,11 @@ slave role或者sentinel role的sentinelRedisInstance struct.
 2156             si = createSentinelRedisInstance(NULL,SRI_SENTINEL,
 2157                             token[0],port,master->quorum,master);
 ```
+
 有关sentinelProcessHelloMessage的细节后续章节会详细解释。
-    
+
 struct sentinelRedisInstance那个代码段有一些注释有错误，
-    
+
 ```
 /* src/sentinel.c */
 118 typedef struct sentinelRedisInstance {
@@ -245,7 +246,7 @@ struct sentinelRedisInstance那个代码段有一些注释有错误，
 ```
 
 - *name，并不是slave或者sentinel的createSentinelRedisInstance struct里都存的相应master的name，slave和sentinel有自己的直观的name。
-      
+
 ```
 /* src/sentinel.c */
 909     /* For slaves and sentinel we use ip:port as name. */
@@ -254,7 +255,9 @@ struct sentinelRedisInstance那个代码段有一些注释有错误，
 912         name = slavename;
 913     }
 ```
+
 ```
+/* src/anet.c */
 592 /* Format an IP,port pair into something easy to parse. If IP is IPv6
 593  * (matches for ":"), the ip is surrounded by []. IP and port are just
 594  * separated by colons. This the standard to display addresses within Redis. */
@@ -263,11 +266,11 @@ struct sentinelRedisInstance那个代码段有一些注释有错误，
 597            "[%s]:%d" : "%s:%d", ip, port);
 598 }
 ```
-      
-- *addr，每个sentinelRedisInstance都有，不只是master有。
-      
+
+- *addr，每个sentinelRedisInstance都有，不只是master有.
+
 - *master，slave或者senitinel的sentinelRedisInstance都有,而不是只有slave有。
-      
+
 ```
 /* src/sentinel.c */
 896 sentinelRedisInstance *createSentinelRedisInstance(char *name, int flags, char *hostname, int port, int quorum, sentinelRedisInstance *master) {
@@ -275,45 +278,55 @@ struct sentinelRedisInstance那个代码段有一些注释有错误，
 903     redisAssert((flags & SRI_MASTER) || master != NULL);
 969     ri->master = master;
 ```
-      
+
 ### **sentinel配置概览**
 -----------------------
 
 - sentinel monitor mymaster 127.0.0.1 6379 2
-    
-    sentinel down-after-milliseconds mymaster 60000 
-    
-    sentinel failover-timeout mymaster 180000 
-    
-    sentinel parallel-syncs mymaster 1 
-    
-- sentinel monitor resque 192.168.1.3 6380 4 
-    
-    sentinel down-after-milliseconds resque 10000
-    
-    sentinel failover-timeout resque 180000
-    
-    sentinel parallel-syncs resque 5
-    
-    以上是两组sentinel配置的实例。没什么特别的，如果是在config中指定这种方式的话，
-    请保证sentinel monitor mymaster写在其他该master的配置前面。
-    
+
+sentinel down-after-milliseconds mymaster 60000
+
+sentinel failover-timeout mymaster 180000
+
+sentinel parallel-syncs mymaster 1
+
+- sentinel monitor resque 192.168.1.3 6380 4
+
+sentinel down-after-milliseconds resque 10000
+
+sentinel failover-timeout resque 180000
+
+sentinel parallel-syncs resque 5
+
+以上是两组sentinel配置文件的实际例子。没什么特别的，这些config项同时也可以在sentinel instance
+启动后通过cmd命令runtime config去指定，如果是在配置文件中指定这种方式的话，
+请保证sentinel monitor xxmaster写在其他该master的配置前面。
+
 - monitor那一行，后面的几个参数是master_name, ip, port, quorum.
-    
-- master_name: 就是给master指定的一个唯一的name，唯一有两个意思，一是两个不同的master在这个sentinel不能用同样的名字，二是一组sentinel的两个sentinel之间对同一个master得用同样的名字，才能方便他们沟通（要是不一样，这个我还没试过）。与其说是指定给master的name，不如说是指定给一个master和他的所有slaves这样一组redis instance的name，指定的name并不会长期和一个ip port的redis instance绑定到一起，会failover嘛！。但是只有表达master的时候会直接用这个名字，比如
-    
+
+- master_name: 就是给master指定的一个唯一的name.唯一有两个意思，
+    - 两个不同的master在这个sentinel不能用同样的名字
+
+    - 一组sentinel的两个sentinel之间对同一个master得用同样的名字，才能方便他们沟通,
+    这是一个强制的要求，(要是不一样，这个我还没试过)。
+    与其说是指定给master的name，不如说是指定给一个master和他的所有slaves这样一组redis instance的name，
+    但是形式上该name还是同master instance绑定在一起的,
+    当前指定的name并不会长期和一个ip port的redis instance绑定到一起，会failover嘛！
+    在log和pubsub里的输出master instance会用以下格式，
+
     master failover-test-bucket20 192.168.31.102 6399
-    
-    表达该master的slave和监控该master的所有sentinel时（sentinel的struct有一种隶属于master的struct的关系），则会用（只是举例，并没有用一个master举例）
-    
+
+    表达该master的slave和监控该master的所有sentinel时(sentinel的struct也有一种隶属于master的struct的关系,之前提到过)，
+    则会用(注意的是，只是举例，并没有用同一个master来举例)
+
     slave 192.168.31.100:6413 192.168.31.100 6413 @ failover-test-bucket48 192.168.31.101 6413
-    
+
     sentinel 192.168.31.100:16379 192.168.31.100 16379 @ failover-test-bucket80 192.168.31.100 6429
-    
-    这样的表达方式，slave和sentinel直接的name是"%s:%s" % (ip, port)，但是注意"@"字符后面会列出来他所属的master的信息。
-    
-- quorum：这个数字是配置给投票时统计大多数用的（这个说法很模糊，后续章节会详细解释）
-    
+
+    这样的表达格式里，slave和sentinel直接的name是"%s:%s" % (ip, port)，但是注意"@"字符后面会列出来他所属的master的信息。
+
+- quorum,这个数字是配置给投票时统计大多数用的(这个说法很模糊，后续章节会详细解释, 有两个关键地方会用到)
+
 ```
 /* src/sentinel.c */
 3335     voters = dictSize(master->sentinels)+1; /* All the other sentinels and me. */
@@ -325,10 +338,10 @@ struct sentinelRedisInstance那个代码段有一些注释有错误，
 3384     if (winner && (max_votes < voters_quorum || max_votes < master->quorum))
 3385         winner = NULL;
 ```
-    
+
 - down-after-milliseconds这一行，是指所有类型的实例进入sdown之前，需要down-after-milliseconds这么长时间没有响应，才能够判定。我们之前测试用的是3.1s，但是在网络异常或者sentinel本身负荷很高的情况下，3.1s其实少了一些，后续可能会增加到10s左右。
-    
-- failover-timeout这一行是指failover超过这么长时间就会被判定为超时（不准确，后续章节会解释）。
+
+- failover-timeout这一行是指failover超过这么长时间就会被判定为超时(不准确，后续章节会解释)。
     
 - parallel-syncs这一行跟我们关系不大，是用来failover之后限制同时reconf slave of 新的master的slave的个数的，而我们的用法是每个master只有一个slave。
     
