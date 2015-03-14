@@ -1,5 +1,5 @@
-##sentinel简介
--------------
+## sentinel简介
+--------------
 
 ### **sentinel是什么**
 ---------------------
@@ -72,10 +72,11 @@ sentinel是p2p结构，所以大概的拓扑结构就是一组sentinel instances
 但是并不会通过与其他sentinel之间的渠道或者更多的其他的渠道去发现更多的master，
 不可否认的是，其他sentinel会pubsub自己监控的所有masters的消息给当前sentinel，
 但是当前sentinel收到这些消息后，发现遇到了未知的master，会直接忽略相关消息, 或者回复没有建设性的意见。
-也就是说master信息是不会通过广播机制传递的, sentinel monitor的master集合并不会自己增长。
+也就是说master信息是不会通过广播机制传递的, sentinel monitor的master集合并不会自己增长。**
 
 如果sentinel从收集来的信息判断master表现得有异常，sentinel就会自动从该master的slave中选一个提升为新的master，
-一次failover是由这组sentinel中的一个来主导的，行动之前需要获得组内大多数sentinel的认同。
+一次failover是由这组sentinel中的其中一个来主导的，行动之前需要获得组内大多数sentinel的认同, 
+之后他基本就是一个独裁的角色，后续会讲到。
 
 另外，sentinel是集群部署的，一个sentinel可以说是基本不能体现出sentinel的设计，
 集群中的这些sentinel是对等的,即每个sentinel的担当是一样的。
@@ -125,115 +126,115 @@ sentinel是p2p结构，所以大概的拓扑结构就是一组sentinel instances
 ```
 
 可以看出来，sentinelRedisInstance struct可以表达master、slave、sentinel三种角色，
-在上述提到的那个global的sentinel的struct里，masters那个dict里每一个value都指向
+**在上述提到的那个global的sentinel的struct里，masters那个dict里每一个value都指向
 这样一个master role的sentinelRedisInstance struct的pointer，
 而这样一个master role的sentinelRedisInstance struct里又有dict *sentinels和dict *slaves
 这样两个dict，slaves这个dict的value包含该master的所有slaves的指针，sentinels这个
 dict里包含有moniter该master的所有other sentinels的指针。而这些指针进一步指向
 slave role或者sentinel role的sentinelRedisInstance struct.
 而对于每个slave role或者sentinel role的sentinelRedisInstance struct里的*master又是
-所属的那个master sentinelRedisInstance struct的指针。
+所属的那个master sentinelRedisInstance struct的指针。**
 
 - 去填充这个sentinel.masters这个dict的地方在列举如下,
 
-```
-/* src/sentinel.c */
-2628 void sentinelCommand(redisClient *c) {
-2739     } else if (!strcasecmp(c->argv[1]->ptr,"monitor")) {
-2758         /* Parameters are valid. Try to create the master instance. */
-2759         ri = createSentinelRedisInstance(c->argv[2]->ptr,SRI_MASTER,
-2760                 c->argv[3]->ptr,port,quorum,NULL);
+    ```
+    /* src/sentinel.c */
+    2628 void sentinelCommand(redisClient *c) {
+    2739     } else if (!strcasecmp(c->argv[1]->ptr,"monitor")) {
+    2758         /* Parameters are valid. Try to create the master instance. */
+    2759         ri = createSentinelRedisInstance(c->argv[2]->ptr,SRI_MASTER,
+    2760                 c->argv[3]->ptr,port,quorum,NULL);
 
-1333 /* ============================ Config handling ============================= */
-1334 char *sentinelHandleConfiguration(char **argv, int argc) {
-1337     if (!strcasecmp(argv[0],"monitor") && argc == 5) {
-1338         /* monitor <name> <host> <port> <quorum> */
-1339         int quorum = atoi(argv[4]);
-1340
-1341         if (quorum <= 0) return "Quorum must be 1 or greater.";
-1342         if (createSentinelRedisInstance(argv[1],SRI_MASTER,argv[2],
-1343                                         atoi(argv[3]),quorum,NULL) == NULL)
-```
+    1333 /* ============================ Config handling ============================= */
+    1334 char *sentinelHandleConfiguration(char **argv, int argc) {
+    1337     if (!strcasecmp(argv[0],"monitor") && argc == 5) {
+    1338         /* monitor <name> <host> <port> <quorum> */
+    1339         int quorum = atoi(argv[4]);
+    1340
+    1341         if (quorum <= 0) return "Quorum must be 1 or greater.";
+    1342         if (createSentinelRedisInstance(argv[1],SRI_MASTER,argv[2],
+    1343                                         atoi(argv[3]),quorum,NULL) == NULL)
+    ```
 
 - 填充master->slaves这个dict的地方列举如下,
 
-```
-/* src/sentinel.c */
-1226 int sentinelResetMasterAndChangeAddress(sentinelRedisInstance *master, char *ip, int port) {
-1265     /* Add slaves back. */
-1266     for (j = 0; j < numslaves; j++) {
-1267         sentinelRedisInstance *slave;
-1268
-1269         slave = createSentinelRedisInstance(NULL,SRI_SLAVE,slaves[j]->ip,
-1270                     slaves[j]->port, master->quorum, master);
+    ```
+    /* src/sentinel.c */
+    1226 int sentinelResetMasterAndChangeAddress(sentinelRedisInstance *master, char *ip, int port) {
+    1265     /* Add slaves back. */
+    1266     for (j = 0; j < numslaves; j++) {
+    1267         sentinelRedisInstance *slave;
+    1268
+    1269         slave = createSentinelRedisInstance(NULL,SRI_SLAVE,slaves[j]->ip,
+    1270                     slaves[j]->port, master->quorum, master);
 
-1333 /* ============================ Config handling ============================= */
-1334 char *sentinelHandleConfiguration(char **argv, int argc) {
-1411     } else if (!strcasecmp(argv[0],"known-slave") && argc == 4) {
-1412         sentinelRedisInstance *slave;
-1413
-1414         /* known-slave <name> <ip> <port> */
-1415         ri = sentinelGetMasterByName(argv[1]);
-1416         if (!ri) return "No such master with specified name.";
-1417         if ((slave = createSentinelRedisInstance(NULL,SRI_SLAVE,argv[2],
-1418                     atoi(argv[3]), ri->quorum, ri)) == NULL)
+    1333 /* ============================ Config handling ============================= */
+    1334 char *sentinelHandleConfiguration(char **argv, int argc) {
+    1411     } else if (!strcasecmp(argv[0],"known-slave") && argc == 4) {
+    1412         sentinelRedisInstance *slave;
+    1413
+    1414         /* known-slave <name> <ip> <port> */
+    1415         ri = sentinelGetMasterByName(argv[1]);
+    1416         if (!ri) return "No such master with specified name.";
+    1417         if ((slave = createSentinelRedisInstance(NULL,SRI_SLAVE,argv[2],
+    1418                     atoi(argv[3]), ri->quorum, ri)) == NULL)
 
-1789 /* Process the INFO output from masters. */
-1790 void sentinelRefreshInstanceInfo(sentinelRedisInstance *ri, const char *info) {
-1850             /* Check if we already have this slave into our table,
-1851              * otherwise add it. */
-1852             if (sentinelRedisInstanceLookupSlave(ri,ip,atoi(port)) == NULL) {
-1853                 if ((slave = createSentinelRedisInstance(NULL,SRI_SLAVE,ip,
-1854                             atoi(port), ri->quorum, ri)) != NULL)
+    1789 /* Process the INFO output from masters. */
+    1790 void sentinelRefreshInstanceInfo(sentinelRedisInstance *ri, const char *info) {
+    1850             /* Check if we already have this slave into our table,
+    1851              * otherwise add it. */
+    1852             if (sentinelRedisInstanceLookupSlave(ri,ip,atoi(port)) == NULL) {
+    1853                 if ((slave = createSentinelRedisInstance(NULL,SRI_SLAVE,ip,
+    1854                             atoi(port), ri->quorum, ri)) != NULL)
 
-2378     if ((ri->flags & SRI_SENTINEL) == 0 &&
-2379         (ri->info_refresh == 0 ||
-2380         (now - ri->info_refresh) > info_period))
-2381     {
-2382         /* Send INFO to masters and slaves, not sentinels. */
-2383         retval = redisAsyncCommand(ri->cc,
-2384             sentinelInfoReplyCallback, NULL, "INFO");
-2385         if (retval == REDIS_OK) ri->pending_commands++;
+    2378     if ((ri->flags & SRI_SENTINEL) == 0 &&
+    2379         (ri->info_refresh == 0 ||
+    2380         (now - ri->info_refresh) > info_period))
+    2381     {
+    2382         /* Send INFO to masters and slaves, not sentinels. */
+    2383         retval = redisAsyncCommand(ri->cc,
+    2384             sentinelInfoReplyCallback, NULL, "INFO");
+    2385         if (retval == REDIS_OK) ri->pending_commands++;
 
-2038 void sentinelInfoReplyCallback(redisAsyncContext *c, void *reply, void *privdata) {
-2047     if (r->type == REDIS_REPLY_STRING) {
-2048         sentinelRefreshInstanceInfo(ri,r->str);
-2049     }
-2050 }
-```
+    2038 void sentinelInfoReplyCallback(redisAsyncContext *c, void *reply, void *privdata) {
+    2047     if (r->type == REDIS_REPLY_STRING) {
+    2048         sentinelRefreshInstanceInfo(ri,r->str);
+    2049     }
+    2050 }
+    ```
 
 - 填充master->sentinels这个dict的地方列举如下,
 
-```
-/* src/sentinel.c */
-1333 /* ============================ Config handling ============================= */
-1334 char *sentinelHandleConfiguration(char **argv, int argc) {
-1422     } else if (!strcasecmp(argv[0],"known-sentinel") &&
-1423                (argc == 4 || argc == 5)) {
-1424         sentinelRedisInstance *si;
-1425
-1426         /* known-sentinel <name> <ip> <port> [runid] */
-1427         ri = sentinelGetMasterByName(argv[1]);
-1428         if (!ri) return "No such master with specified name.";
-1429         if ((si = createSentinelRedisInstance(NULL,SRI_SENTINEL,argv[2],
-1430                     atoi(argv[3]), ri->quorum, ri)) == NULL)
+    ```
+    /* src/sentinel.c */
+    1333 /* ============================ Config handling ============================= */
+    1334 char *sentinelHandleConfiguration(char **argv, int argc) {
+    1422     } else if (!strcasecmp(argv[0],"known-sentinel") &&
+    1423                (argc == 4 || argc == 5)) {
+    1424         sentinelRedisInstance *si;
+    1425
+    1426         /* known-sentinel <name> <ip> <port> [runid] */
+    1427         ri = sentinelGetMasterByName(argv[1]);
+    1428         if (!ri) return "No such master with specified name.";
+    1429         if ((si = createSentinelRedisInstance(NULL,SRI_SENTINEL,argv[2],
+    1430                     atoi(argv[3]), ri->quorum, ri)) == NULL)
 
-2119  * If the master name specified in the message is not known, the message is
-2120  * discarded. */
-2121 void sentinelProcessHelloMessage(char *hello, int hello_len) {
-2128     sentinelRedisInstance *si, *master;
-2129
-2130     if (numtokens == 8) {
-2131         /* Obtain a reference to the master this hello message is about */
-2132         master = sentinelGetMasterByName(token[4]);
-2155             /* Add the new sentinel. */
-2156             si = createSentinelRedisInstance(NULL,SRI_SENTINEL,
-2157                             token[0],port,master->quorum,master);
-```
+    2119  * If the master name specified in the message is not known, the message is
+    2120  * discarded. */
+    2121 void sentinelProcessHelloMessage(char *hello, int hello_len) {
+    2128     sentinelRedisInstance *si, *master;
+    2129
+    2130     if (numtokens == 8) {
+    2131         /* Obtain a reference to the master this hello message is about */
+    2132         master = sentinelGetMasterByName(token[4]);
+    2155             /* Add the new sentinel. */
+    2156             si = createSentinelRedisInstance(NULL,SRI_SENTINEL,
+    2157                             token[0],port,master->quorum,master);
+    ```
 
-有关sentinelProcessHelloMessage的细节后续章节会详细解释。
+    有关sentinelProcessHelloMessage的细节后续章节会详细解释。
 
-struct sentinelRedisInstance那个代码段有一些注释有错误，
+另外struct sentinelRedisInstance那个代码段有一些注释有错误，
 
 ```
 /* src/sentinel.c */
@@ -247,37 +248,37 @@ struct sentinelRedisInstance那个代码段有一些注释有错误，
 
 - *name，并不是slave或者sentinel的createSentinelRedisInstance struct里都存的相应master的name，slave和sentinel有自己的直观的name。
 
-```
-/* src/sentinel.c */
-909     /* For slaves and sentinel we use ip:port as name. */
-910     if (flags & (SRI_SLAVE|SRI_SENTINEL)) {
-911         anetFormatAddr(slavename, sizeof(slavename), hostname, port);
-912         name = slavename;
-913     }
-```
+    ```
+    /* src/sentinel.c */
+    909     /* For slaves and sentinel we use ip:port as name. */
+    910     if (flags & (SRI_SLAVE|SRI_SENTINEL)) {
+    911         anetFormatAddr(slavename, sizeof(slavename), hostname, port);
+    912         name = slavename;
+    913     }
+    ```
 
-```
-/* src/anet.c */
-592 /* Format an IP,port pair into something easy to parse. If IP is IPv6
-593  * (matches for ":"), the ip is surrounded by []. IP and port are just
-594  * separated by colons. This the standard to display addresses within Redis. */
-595 int anetFormatAddr(char *buf, size_t buf_len, char *ip, int port) {
-596     return snprintf(buf,buf_len, strchr(ip,':') ?
-597            "[%s]:%d" : "%s:%d", ip, port);
-598 }
-```
+    ```
+    /* src/anet.c */
+    592 /* Format an IP,port pair into something easy to parse. If IP is IPv6
+    593  * (matches for ":"), the ip is surrounded by []. IP and port are just
+    594  * separated by colons. This the standard to display addresses within Redis. */
+    595 int anetFormatAddr(char *buf, size_t buf_len, char *ip, int port) {
+    596     return snprintf(buf,buf_len, strchr(ip,':') ?
+    597            "[%s]:%d" : "%s:%d", ip, port);
+    598 }
+    ```
 
 - *addr，每个sentinelRedisInstance都有，不只是master有.
 
 - *master，slave或者senitinel的sentinelRedisInstance都有,而不是只有slave有。
 
-```
-/* src/sentinel.c */
-896 sentinelRedisInstance *createSentinelRedisInstance(char *name, int flags, char *hostname, int port, int quorum, sentinelRedisInstance *master) {
-902     redisAssert(flags & (SRI_MASTER|SRI_SLAVE|SRI_SENTINEL));
-903     redisAssert((flags & SRI_MASTER) || master != NULL);
-969     ri->master = master;
-```
+    ```
+    /* src/sentinel.c */
+    896 sentinelRedisInstance *createSentinelRedisInstance(char *name, int flags, char *hostname, int port, int quorum, sentinelRedisInstance *master) {
+    902     redisAssert(flags & (SRI_MASTER|SRI_SLAVE|SRI_SENTINEL));
+    903     redisAssert((flags & SRI_MASTER) || master != NULL);
+    969     ri->master = master;
+    ```
 
 ### **sentinel配置概览**
 -----------------------
@@ -305,6 +306,7 @@ struct sentinelRedisInstance那个代码段有一些注释有错误，
 - monitor那一行，后面的几个参数是master_name, ip, port, quorum.
 
 - master_name: 就是给master指定的一个唯一的name.唯一有两个意思，
+
     - 两个不同的master在这个sentinel不能用同样的名字
 
     - 一组sentinel的两个sentinel之间对同一个master得用同样的名字，才能方便他们沟通,
