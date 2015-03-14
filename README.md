@@ -5,6 +5,8 @@
 
 - **sentinel简介**
 
+- **sentinel主逻辑函数**
+
 - **sentinel failover过程的详细介绍**
 
 - **sentinel failover重点细节**
