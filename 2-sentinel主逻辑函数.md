@@ -266,59 +266,58 @@ sentinelHandleRedisInstance里的每个函数都很有意思，后续章节会�
         ri->flags & (SRI_MASTER|SRI_SLAVE)来说，是指cc或者pc中任意一个处于未响应的状态，
         对于ri->flags & SRI_SENTINEL来讲,是指cc处于未响应的状态。
 
+### **sentinelSendPeriodicCommands**
 
+相关常量定义如下：
 
+```
+/* src/sentinel.c */
+71 /* Note: times are in milliseconds. */
+72 #define SENTINEL_INFO_PERIOD 10000
+73 #define SENTINEL_PING_PERIOD 1000
+74 #define SENTINEL_ASK_PERIOD 1000
+75 #define SENTINEL_PUBLISH_PERIOD 2000
+```
 
-- sentinelSendPeriodicCommands
-    相关常量定义如下：
-    
-    ```
-    /* src/sentinel.c */
-    71 /* Note: times are in milliseconds. */
-      72 #define SENTINEL_INFO_PERIOD 10000
-      73 #define SENTINEL_PING_PERIOD 1000
-      74 #define SENTINEL_ASK_PERIOD 1000
-      75 #define SENTINEL_PUBLISH_PERIOD 2000
-    ```
-    
-    ```
-    /* src/sentinel.c */
-    2342 /* Send periodic PING, INFO, and PUBLISH to the Hello channel to
-    2343  * the specified master or slave instance. */
-    2344 void sentinelSendPeriodicCommands(sentinelRedisInstance *ri) {
-    2345     mstime_t now = mstime();
-    2346     mstime_t info_period, ping_period;
-    2347     int retval;
-    2348
-    2349     /* Return ASAP if we have already a PING or INFO already pending, or
-    2350      * in the case the instance is not properly connected. */
-    2351     if (ri->flags & SRI_DISCONNECTED) return;
-    2352
-    2353     /* For INFO, PING, PUBLISH that are not critical commands to send we
-    2354      * also have a limit of SENTINEL_MAX_PENDING_COMMANDS. We don't
-    2355      * want to use a lot of memory just because a link is not working
-    2356      * properly (note that anyway there is a redundant protection about this,
-    2357      * that is, the link will be disconnected and reconnected if a long
-    2358      * timeout condition is detected. */
-    2359     if (ri->pending_commands >= SENTINEL_MAX_PENDING_COMMANDS) return;
-    2360
-    2361     /* If this is a slave of a master in O_DOWN condition we start sending
-    2362      * it INFO every second, instead of the usual SENTINEL_INFO_PERIOD
-    2363      * period. In this state we want to closely monitor slaves in case they
-    2364      * are turned into masters by another Sentinel, or by the sysadmin. */
-    2365     if ((ri->flags & SRI_SLAVE) &&
-    2366         (ri->master->flags & (SRI_O_DOWN|SRI_FAILOVER_IN_PROGRESS))) {
-    2367         info_period = 1000;
-    2368     } else {
-    2369         info_period = SENTINEL_INFO_PERIOD;
-    2370     }
-    2371
-    2372     /* We ping instances every time the last received pong is older than
-    2373      * the configured 'down-after-milliseconds' time, but every second
-    2374      * anyway if 'down-after-milliseconds' is greater than 1 second. */
-    2375     ping_period = ri->down_after_period;
-    2376     if (ping_period > SENTINEL_PING_PERIOD) ping_period = SENTINEL_PING_PERIOD;
-    ```
+```
+/* src/sentinel.c */
+2342 /* Send periodic PING, INFO, and PUBLISH to the Hello channel to
+2343  * the specified master or slave instance. */
+2344 void sentinelSendPeriodicCommands(sentinelRedisInstance *ri) {
+2345     mstime_t now = mstime();
+2346     mstime_t info_period, ping_period;
+2347     int retval;
+2348
+2349     /* Return ASAP if we have already a PING or INFO already pending, or
+2350      * in the case the instance is not properly connected. */
+2351     if (ri->flags & SRI_DISCONNECTED) return;
+2352
+2353     /* For INFO, PING, PUBLISH that are not critical commands to send we
+2354      * also have a limit of SENTINEL_MAX_PENDING_COMMANDS. We don't
+2355      * want to use a lot of memory just because a link is not working
+2356      * properly (note that anyway there is a redundant protection about this,
+2357      * that is, the link will be disconnected and reconnected if a long
+2358      * timeout condition is detected. */
+2359     if (ri->pending_commands >= SENTINEL_MAX_PENDING_COMMANDS) return;
+2360
+2361     /* If this is a slave of a master in O_DOWN condition we start sending
+2362      * it INFO every second, instead of the usual SENTINEL_INFO_PERIOD
+2363      * period. In this state we want to closely monitor slaves in case they
+2364      * are turned into masters by another Sentinel, or by the sysadmin. */
+2365     if ((ri->flags & SRI_SLAVE) &&
+2366         (ri->master->flags & (SRI_O_DOWN|SRI_FAILOVER_IN_PROGRESS))) {
+2367         info_period = 1000;
+2368     } else {
+2369         info_period = SENTINEL_INFO_PERIOD;
+2370     }
+2371
+2372     /* We ping instances every time the last received pong is older than
+2373      * the configured 'down-after-milliseconds' time, but every second
+2374      * anyway if 'down-after-milliseconds' is greater than 1 second. */
+2375     ping_period = ri->down_after_period;
+2376     if (ping_period > SENTINEL_PING_PERIOD) ping_period = SENTINEL_PING_PERIOD;
+```
+
     先看sentinelSendPeriodicCommands的前半部分，如果是SRI_DISCONNECTED，就跳过。
     
     并且设置了一个最大的pending commands的上限, 默认是100，达到上限之后，不再增加，除非老的未响应的连接超时被杀掉腾出位置来。从这里可以看出，如果监控一批100个以上的redis instances，这个上限还是很紧张的。
