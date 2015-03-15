@@ -77,193 +77,194 @@ sentinelHandleRedisInstance里的每个函数都很有意思，后续章节会�
 
 - tcp连接相关的数据结构，
 
-```
-/* src/sentinel.c */
-57 #define SRI_DISCONNECTED (1<<3)
+    ```
+    /* src/sentinel.c */
+    57 #define SRI_DISCONNECTED (1<<3)
 
-118 typedef struct sentinelRedisInstance {
-124     redisAsyncContext *cc; /* Hiredis context for commands. */
-125     redisAsyncContext *pc; /* Hiredis context for Pub / Sub. */
-127     mstime_t cc_conn_time; /* cc connection time. */
-128     mstime_t pc_conn_time; /* pc connection time. */
-```
+    118 typedef struct sentinelRedisInstance {
+    124     redisAsyncContext *cc; /* Hiredis context for commands. */
+    125     redisAsyncContext *pc; /* Hiredis context for Pub / Sub. */
+    127     mstime_t cc_conn_time; /* cc connection time. */
+    128     mstime_t pc_conn_time; /* pc connection time. */
+    ```
 
-cc是连接到的sentinelRedisInstance具体所指向的instance的command connection，
-pc是用于subscribe sentinelRedisInstance具体所指向的instance的pubsub connection。
+    cc是连接到的sentinelRedisInstance具体所指向的instance的command connection，
+    pc是用于subscribe sentinelRedisInstance具体所指向的instance的pubsub connection。
 
-从之前介绍的sentinel的拓扑结构结合此处来看，每个master sentinelRedisInstance struct
-会创建一个cc连接和一个pc连接到指向的相应的master redis instance，每个
-master sentinelRedisInstance struct的*slaves dict所指向的所有
-slave sentinelRedisInstance struct也会一一创建一个cc连接和一个pc连接到指向的
-相应的slave redis instance。另外对于每个master sentinelRedisInstance struct
-的*sentinels dict所指向的所有sentinel sentinelRedisInstance也会一一创建一个cc连接
-到指向的相应的sentinel instance,**没有pc，sentinel不会直接订阅其他的sentinel。
-即sentinel之间不会直接的subscribe的行为，也就没有pc存在的必要。**
-**稍微重新提一下，拓扑结构中的master struct的*sentinels部分，
-对于每个master，对于监控某个master的所有other sentinel instance, 都会直接
-创建一个role为sentinel的sentinelRedisInstance作为到当前sentinel的本地映射并挂载
-在该master strurt的下，即master struct的*sentinels的value为
-指向sentinel sentinelRedisInstance的指针。注意到此处，直接二字就意味着重复，
-一个sentinel可以同时monitor一批redis master instance。也就是两个master下可能有相同的
-sentinel instance，对此采取的操作是重复的独立的建立两个sentinel sentinelRedisInstance,
-而不是复用同一个sentinel sentinelRedisInstance,用指针或者其他的方式来共享sentinel sentinelRedisInstance。
-这将会导致一个很严重的连接数增长的问题，后续会详细介绍.**
+    从之前介绍的sentinel的拓扑结构结合此处来看，每个master sentinelRedisInstance struct
+    会创建一个cc连接和一个pc连接到指向的相应的master redis instance，每个
+    master sentinelRedisInstance struct的\*slaves dict所指向的所有
+    slave sentinelRedisInstance struct也会一一创建一个cc连接和一个pc连接到指向的
+    相应的slave redis instance。另外对于每个master sentinelRedisInstance struct
+    的\*sentinels dict所指向的所有sentinel sentinelRedisInstance也会一一创建一个cc连接
+    到指向的相应的sentinel instance,
+    **但是没有pc，sentinel不会直接订阅其他的sentinel。
+    即sentinel之间不会直接的subscribe的行为，也就没有pc存在的必要。**
+    **稍微重新提一下，拓扑结构中的master struct的\*sentinels部分，
+    对于每个master，对于监控某个master的所有other sentinel instance, 都会直接
+    创建一个role为sentinel的sentinelRedisInstance作为到当前sentinel的本地映射并挂载
+    在该master strurt的下，即master struct的\*sentinels的value为
+    指向sentinel sentinelRedisInstance的指针。注意到此处，直接二字就意味着重复，
+    一个sentinel可以同时monitor一批redis master instance。也就是两个master下可能有相同的
+    sentinel instance，对此采取的操作是重复的独立的建立两个sentinel sentinelRedisInstance,
+    而不是复用同一个sentinel sentinelRedisInstance,用指针或者其他的方式来共享sentinel sentinelRedisInstance。
+    这将会导致一个很严重的连接数增长的问题，后续会详细介绍.**
 
 - 继续看，初始化连接以及连接状态，可以看出来一开始都置为disconnected状态,
 
-```
-/* src/sentinel.c */
-931     /* Note that all the instances are started in the disconnected state,
-932      * the event loop will take care of connecting them. */
-933     ri->flags = flags | SRI_DISCONNECTED;
-938     ri->cc = NULL;
-939     ri->pc = NULL;
-940     ri->pending_commands = 0;
-941     ri->cc_conn_time = 0;
-942     ri->pc_conn_time = 0;
-```
+    ```
+    /* src/sentinel.c */
+    931     /* Note that all the instances are started in the disconnected state,
+    932      * the event loop will take care of connecting them. */
+    933     ri->flags = flags | SRI_DISCONNECTED;
+    938     ri->cc = NULL;
+    939     ri->pc = NULL;
+    940     ri->pending_commands = 0;
+    941     ri->cc_conn_time = 0;
+    942     ri->pc_conn_time = 0;
+    ```
 
 - 干掉无效连接,如长时间没有获得过正确的reply之类的, 在此分为cc和pc两种连接方式介绍一下reconnect方式。
 
-```
-/* src/sentinel.c */
-1619 /* Completely disconnect a hiredis link from an instance. */
-1620 void sentinelKillLink(sentinelRedisInstance *ri, redisAsyncContext *c) {
-1621     if (ri->cc == c) {
-1622         ri->cc = NULL;
-1623         ri->pending_commands = 0;
-1624     }
-1625     if (ri->pc == c) ri->pc = NULL;
-1626     c->data = NULL;
-1627     ri->flags |= SRI_DISCONNECTED;
-1628     redisAsyncFree(c);
-1629 }
-```
+    ```
+    /* src/sentinel.c */
+    1619 /* Completely disconnect a hiredis link from an instance. */
+    1620 void sentinelKillLink(sentinelRedisInstance *ri, redisAsyncContext *c) {
+    1621     if (ri->cc == c) {
+    1622         ri->cc = NULL;
+    1623         ri->pending_commands = 0;
+    1624     }
+    1625     if (ri->pc == c) ri->pc = NULL;
+    1626     c->data = NULL;
+    1627     ri->flags |= SRI_DISCONNECTED;
+    1628     redisAsyncFree(c);
+    1629 }
+    ```
 
     - cc重连机制, 也即cc的sentinelKillLink
 
-    ```
-    /* src/sentinel.c */
-    1703 /* Create the async connections for the specified instance if the instance
-    1704  * is disconnected. Note that the SRI_DISCONNECTED flag is set even if just
-    1705  * one of the two links (commands and pub/sub) is missing. */
-    1706 void sentinelReconnectInstance(sentinelRedisInstance *ri) {
-    1707     if (!(ri->flags & SRI_DISCONNECTED)) return;
-    1708
-    1709     /* Commands connection. */
-    1710     if (ri->cc == NULL) {
-    1711         ri->cc = redisAsyncConnectBind(ri->addr->ip,ri->addr->port,REDIS_BIND_ADDR);
-    1712         if (ri->cc->err) {
-    1713             sentinelEvent(REDIS_DEBUG,"-cmd-link-reconnection",ri,"%@ #%s",
-    1714                 ri->cc->errstr);
-    1715             sentinelKillLink(ri,ri->cc);
-    1716         } else {
-    1717             redisLog(REDIS_VERBOSE,
-    1718                 "+cmd-link-connection %s %d",
-    1719                 ri->addr->ip, ri->addr->port);
-    1720             ri->cc_conn_time = mstime();
-    1721             ri->cc->data = ri;
-    1722             redisAeAttach(server.el,ri->cc);
-    1723             redisAsyncSetConnectCallback(ri->cc,
-    1724                                             sentinelLinkEstablishedCallback);
-    1725             redisAsyncSetDisconnectCallback(ri->cc,
-    1726                                             sentinelDisconnectCallback);
-    1727             sentinelSendAuthIfNeeded(ri,ri->cc);
-    1728             sentinelSetClientName(ri,ri->cc,"cmd");
-    ```
+        ```
+        /* src/sentinel.c */
+        1703 /* Create the async connections for the specified instance if the instance
+        1704  * is disconnected. Note that the SRI_DISCONNECTED flag is set even if just
+        1705  * one of the two links (commands and pub/sub) is missing. */
+        1706 void sentinelReconnectInstance(sentinelRedisInstance *ri) {
+        1707     if (!(ri->flags & SRI_DISCONNECTED)) return;
+        1708
+        1709     /* Commands connection. */
+        1710     if (ri->cc == NULL) {
+        1711         ri->cc = redisAsyncConnectBind(ri->addr->ip,ri->addr->port,REDIS_BIND_ADDR);
+        1712         if (ri->cc->err) {
+        1713             sentinelEvent(REDIS_DEBUG,"-cmd-link-reconnection",ri,"%@ #%s",
+        1714                 ri->cc->errstr);
+        1715             sentinelKillLink(ri,ri->cc);
+        1716         } else {
+        1717             redisLog(REDIS_VERBOSE,
+        1718                 "+cmd-link-connection %s %d",
+        1719                 ri->addr->ip, ri->addr->port);
+        1720             ri->cc_conn_time = mstime();
+        1721             ri->cc->data = ri;
+        1722             redisAeAttach(server.el,ri->cc);
+        1723             redisAsyncSetConnectCallback(ri->cc,
+        1724                                             sentinelLinkEstablishedCallback);
+        1725             redisAsyncSetDisconnectCallback(ri->cc,
+        1726                                             sentinelDisconnectCallback);
+        1727             sentinelSendAuthIfNeeded(ri,ri->cc);
+        1728             sentinelSetClientName(ri,ri->cc,"cmd");
+        ```
 
-    可以看到是通过SRI_DISCONNECTED这个flag来判断是否要进一步判断重连，
-    这个flag的作用就是cc或者pc只要出问题了，都为真，都需要杀掉重连。
-    然后是判断ri->cc是否为NULL。由于是async bind，还设置了
-    sentinelLinkEstablishedCallback，sentinelDisconnectCallback两个callback。
+        可以看到是通过SRI_DISCONNECTED这个flag来判断是否要进一步判断重连，
+        这个flag的作用就是cc或者pc只要出问题了，都为真，都需要杀掉重连。
+        然后是判断ri->cc是否为NULL。由于是async bind，还设置了
+        sentinelLinkEstablishedCallback，sentinelDisconnectCallback两个callback。
 
-    还有一个值得注意的地方，sentinelSetClientName会让这个link的remote instance将
-    这个link的命名从一个无意义的名字提升为一个成更有意义的名字，供使用者
-    从remote instance的角度获得更清晰的分门别类的连接信息，以便能够更好的管理连接。
+        还有一个值得注意的地方，sentinelSetClientName会让这个link的remote instance将
+        这个link的命名从一个无意义的名字提升为一个成更有意义的名字，供使用者
+        从remote instance的角度获得更清晰的分门别类的连接信息，以便能够更好的管理连接。
 
-    ```
-    /* src/sentinel.c */
-    1686 /* Use CLIENT SETNAME to name the connection in the Redis instance as
-    1687  * sentinel-<first_8_chars_of_runid>-<connection_type>
-    1688  * The connection type is "cmd" or "pubsub" as specified by 'type'.
-    1689  *
-    1690  * This makes it possible to list all the sentinel instances connected
-    1691  * to a Redis servewr with CLIENT LIST, grepping for a specific name format. */
-    1692 void sentinelSetClientName(sentinelRedisInstance *ri, redisAsyncContext *c, char *type) {
-    1693     char name[64];
-    1694
-    1695     snprintf(name,sizeof(name),"sentinel-%.8s-%s",server.runid,type);
-    1696     if (redisAsyncCommand(c, sentinelDiscardReplyCallback, NULL,
-    1697         "CLIENT SETNAME %s", name) == REDIS_OK)
-    1698     {
-    1699         ri->pending_commands++;
-    1700     }
-    1701 }
-    ```
+        ```
+        /* src/sentinel.c */
+        1686 /* Use CLIENT SETNAME to name the connection in the Redis instance as
+        1687  * sentinel-<first_8_chars_of_runid>-<connection_type>
+        1688  * The connection type is "cmd" or "pubsub" as specified by 'type'.
+        1689  *
+        1690  * This makes it possible to list all the sentinel instances connected
+        1691  * to a Redis servewr with CLIENT LIST, grepping for a specific name format. */
+        1692 void sentinelSetClientName(sentinelRedisInstance *ri, redisAsyncContext *c, char *type) {
+        1693     char name[64];
+        1694
+        1695     snprintf(name,sizeof(name),"sentinel-%.8s-%s",server.runid,type);
+        1696     if (redisAsyncCommand(c, sentinelDiscardReplyCallback, NULL,
+        1697         "CLIENT SETNAME %s", name) == REDIS_OK)
+        1698     {
+        1699         ri->pending_commands++;
+        1700     }
+        1701 }
+        ```
 
     - pc重连机制
 
-    ```
-    /* src/sentinel.c */
-    1706 void sentinelReconnectInstance(sentinelRedisInstance *ri) {
-    1707     if (!(ri->flags & SRI_DISCONNECTED)) return;
-    1734     /* Pub / Sub */
-    1735     if ((ri->flags & (SRI_MASTER|SRI_SLAVE)) && ri->pc == NULL) {
-    1736         ri->pc = redisAsyncConnectBind(ri->addr->ip,ri->addr->port,REDIS_BIND_ADDR);
-    1737         if (ri->pc->err) {
-    1738             sentinelEvent(REDIS_DEBUG,"-pubsub-link-reconnection",ri,"%@ #%s",
-    1739                 ri->pc->errstr);
-    1740             sentinelKillLink(ri,ri->pc);
-    1741         } else {
-    1742             int retval;
-    1743
-    1744             redisLog(REDIS_VERBOSE,
-    1745                 "+pubsub-link-connection %s %d",
-    1746                 ri->addr->ip, ri->addr->port);
-    1747             ri->pc_conn_time = mstime();
-    1748             ri->pc->data = ri;
-    1749             redisAeAttach(server.el,ri->pc);
-    1750             redisAsyncSetConnectCallback(ri->pc,
-    1751                                             sentinelLinkEstablishedCallback);
-    1752             redisAsyncSetDisconnectCallback(ri->pc,
-    1753                                             sentinelDisconnectCallback);
-    1754             sentinelSendAuthIfNeeded(ri,ri->pc);
-    1755             sentinelSetClientName(ri,ri->pc,"pubsub");
-    1756             /* Now we subscribe to the Sentinels "Hello" channel. */
-    1757             retval = redisAsyncCommand(ri->pc,
-    1758                 sentinelReceiveHelloMessages, NULL, "SUBSCRIBE %s",
-    1759                     SENTINEL_HELLO_CHANNEL);
-    1760             if (retval != REDIS_OK) {
-    1761                 /* If we can't subscribe, the Pub/Sub connection is useless
-    1762                  * and we can simply disconnect it and try again. */
-    1763                 sentinelKillLink(ri,ri->pc);
-    1764                 return;
-    1765             }
-    1766         }
-    1767     }
-    1768     /* Clear the DISCONNECTED flags only if we have both the connections
-    1769      * (or just the commands connection if this is a sentinel instance). */
-    1770     if (ri->cc && (ri->flags & SRI_SENTINEL || ri->pc))
-    1771         ri->flags &= ~SRI_DISCONNECTED;
-    ```
+        ```
+        /* src/sentinel.c */
+        1706 void sentinelReconnectInstance(sentinelRedisInstance *ri) {
+        1707     if (!(ri->flags & SRI_DISCONNECTED)) return;
+        1734     /* Pub / Sub */
+        1735     if ((ri->flags & (SRI_MASTER|SRI_SLAVE)) && ri->pc == NULL) {
+        1736         ri->pc = redisAsyncConnectBind(ri->addr->ip,ri->addr->port,REDIS_BIND_ADDR);
+        1737         if (ri->pc->err) {
+        1738             sentinelEvent(REDIS_DEBUG,"-pubsub-link-reconnection",ri,"%@ #%s",
+        1739                 ri->pc->errstr);
+        1740             sentinelKillLink(ri,ri->pc);
+        1741         } else {
+        1742             int retval;
+        1743
+        1744             redisLog(REDIS_VERBOSE,
+        1745                 "+pubsub-link-connection %s %d",
+        1746                 ri->addr->ip, ri->addr->port);
+        1747             ri->pc_conn_time = mstime();
+        1748             ri->pc->data = ri;
+        1749             redisAeAttach(server.el,ri->pc);
+        1750             redisAsyncSetConnectCallback(ri->pc,
+        1751                                             sentinelLinkEstablishedCallback);
+        1752             redisAsyncSetDisconnectCallback(ri->pc,
+        1753                                             sentinelDisconnectCallback);
+        1754             sentinelSendAuthIfNeeded(ri,ri->pc);
+        1755             sentinelSetClientName(ri,ri->pc,"pubsub");
+        1756             /* Now we subscribe to the Sentinels "Hello" channel. */
+        1757             retval = redisAsyncCommand(ri->pc,
+        1758                 sentinelReceiveHelloMessages, NULL, "SUBSCRIBE %s",
+        1759                     SENTINEL_HELLO_CHANNEL);
+        1760             if (retval != REDIS_OK) {
+        1761                 /* If we can't subscribe, the Pub/Sub connection is useless
+        1762                  * and we can simply disconnect it and try again. */
+        1763                 sentinelKillLink(ri,ri->pc);
+        1764                 return;
+        1765             }
+        1766         }
+        1767     }
+        1768     /* Clear the DISCONNECTED flags only if we have both the connections
+        1769      * (or just the commands connection if this is a sentinel instance). */
+        1770     if (ri->cc && (ri->flags & SRI_SENTINEL || ri->pc))
+        1771         ri->flags &= ~SRI_DISCONNECTED;
+        ```
 
-    可以看到是判断了((ri->flags & (SRI_MASTER|SRI_SLAVE)) && ri->pc == NULL)，
-    并且设置了callback，并且设置了link name，并且立即通过pc连接订阅了instance上的
-    SENTINEL_HELLO_CHANNEL这个channel，关于hello message后续章节会详细介绍.
-    **从此处可以看出当前sentinel只是同master或者slave instance建立了pc连接，并且
-    只订阅了SENTINEL_HELLO_CHANNEL这个频道，用于被动的接受新鲜的消息。**
+        可以看到是判断了((ri->flags & (SRI_MASTER|SRI_SLAVE)) && ri->pc == NULL)，
+        并且设置了callback，并且设置了link name，并且立即通过pc连接订阅了instance上的
+        SENTINEL_HELLO_CHANNEL这个channel，关于hello message后续章节会详细介绍.
+        **从此处可以看出当前sentinel只是同master或者slave instance建立了pc连接，并且
+        只订阅了SENTINEL_HELLO_CHANNEL这个频道，用于被动的接受新鲜的消息。**
 
-    有几个flag需要注意：
+        有几个flag需要注意：
 
-    - SRI_MASTER 表示这个sentinelRedisInstance struct表示的role是master
+        - SRI_MASTER 表示这个sentinelRedisInstance struct表示的role是master
 
-    - SRI_SLAVE 表示这个sentinelRedisInstance struct表示的role是slave
+        - SRI_SLAVE 表示这个sentinelRedisInstance struct表示的role是slave
 
-    - SRI_SENTINEL 表示这个sentinelRedisInstance struct表示的role是sentinel
+        - SRI_SENTINEL 表示这个sentinelRedisInstance struct表示的role是sentinel
 
-    - SRI_DISCONNECTED 对于表示master或者slave的sentinelRedisInstance struct即
-    ri->flags & (SRI_MASTER|SRI_SLAVE)来说，是指cc或者pc中任意一个处于未响应的状态，
-    对于ri->flags & SRI_SENTINEL来讲,是指cc处于未响应的状态。
+        - SRI_DISCONNECTED 对于表示master或者slave的sentinelRedisInstance struct即
+        ri->flags & (SRI_MASTER|SRI_SLAVE)来说，是指cc或者pc中任意一个处于未响应的状态，
+        对于ri->flags & SRI_SENTINEL来讲,是指cc处于未响应的状态。
 
 
 
