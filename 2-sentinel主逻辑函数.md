@@ -668,51 +668,51 @@ sentinelSendHello后续章节会详细解释，这里解释一下sentinelInfoRep
 
         这里稍微岔开一下，除上面提到的两个用到SRI_PROMOTED的地方。提一下关于SRI_PROMOTED另外几个值得注意的点有，
 
-            - 会在回收sentinelRedisInstance处理SRI_PROMOTED状态的slave的master的promoted_slave属性。
-            以及abort failover的时候该master的promoted_slave的SRI_PROMOTED属性会被清空，
+        - 会在回收sentinelRedisInstance处理SRI_PROMOTED状态的slave的master的promoted_slave属性。
+        以及abort failover的时候该master的promoted_slave的SRI_PROMOTED属性会被清空，
 
-                ```
-                /* src/sentinel.c */
-                997 /* Release this instance and all its slaves, sentinels, hiredis connections.
-                998  * This function does not take care of unlinking the instance from the main
-                999  * masters table (if it is a master) or from its master sentinels/slaves table
-                1000  * if it is a slave or sentinel. */
-                1001 void releaseSentinelRedisInstance(sentinelRedisInstance *ri) {
-                1021     /* Clear state into the master if needed. */
-                1022     if ((ri->flags & SRI_SLAVE) && (ri->flags & SRI_PROMOTED) && ri->master)
-                1023         ri->master->promoted_slave = NULL;
+            ```
+            /* src/sentinel.c */
+            997 /* Release this instance and all its slaves, sentinels, hiredis connections.
+            998  * This function does not take care of unlinking the instance from the main
+            999  * masters table (if it is a master) or from its master sentinels/slaves table
+            1000  * if it is a slave or sentinel. */
+            1001 void releaseSentinelRedisInstance(sentinelRedisInstance *ri) {
+            1021     /* Clear state into the master if needed. */
+            1022     if ((ri->flags & SRI_SLAVE) && (ri->flags & SRI_PROMOTED) && ri->master)
+            1023         ri->master->promoted_slave = NULL;
 
-                3900 void sentinelAbortFailover(sentinelRedisInstance *ri) {
-                3907     if (ri->promoted_slave) {
-                3908         ri->promoted_slave->flags &= ~SRI_PROMOTED;
-                3909         ri->promoted_slave = NULL;
-                3910     }
-                ```
+            3900 void sentinelAbortFailover(sentinelRedisInstance *ri) {
+            3907     if (ri->promoted_slave) {
+            3908         ri->promoted_slave->flags &= ~SRI_PROMOTED;
+            3909         ri->promoted_slave = NULL;
+            3910     }
+            ```
 
-            - 会在failover的过程中，被选中的slave sentinelRedisInstance会被置为SRI_PROMOTED状态，
-            并且将master sentinelRedisInstance的promoted_slave记录为此slave sentinelRedisInstance。
+        - 会在failover的过程中，被选中的slave sentinelRedisInstance会被置为SRI_PROMOTED状态，
+        并且将master sentinelRedisInstance的promoted_slave记录为此slave sentinelRedisInstance。
 
-                ```
-                3668 void sentinelFailoverSelectSlave(sentinelRedisInstance *ri) {
-                3669     sentinelRedisInstance *slave = sentinelSelectSlave(ri);
-                3670
-                3671     /* We don't handle the timeout in this state as the function aborts
-                3672      * the failover or go forward in the next state. */
-                3673     if (slave == NULL) {
-                3677     } else {
-                3678         sentinelEvent(REDIS_WARNING,"+selected-slave",slave,"%@");
-                3679         slave->flags |= SRI_PROMOTED;
-                3680         ri->promoted_slave = slave;
-                3685     }
-                3686 }
-                ```
+            ```
+            3668 void sentinelFailoverSelectSlave(sentinelRedisInstance *ri) {
+            3669     sentinelRedisInstance *slave = sentinelSelectSlave(ri);
+            3670
+            3671     /* We don't handle the timeout in this state as the function aborts
+            3672      * the failover or go forward in the next state. */
+            3673     if (slave == NULL) {
+            3677     } else {
+            3678         sentinelEvent(REDIS_WARNING,"+selected-slave",slave,"%@");
+            3679         slave->flags |= SRI_PROMOTED;
+            3680         ri->promoted_slave = slave;
+            3685     }
+            3686 }
+            ```
 
-            - 值得注意的是，ri->promoted_slave以及SRI_PROMOTED，只有进行某个master的failiover的
-            sentinel instance的该master sentinelRedisInstance struct里才会记录的相关状态，
-            SRI_PROMOTED只有该sentinel instance该master sentinelRedisInstance下的某个被选中
-            准备提升为master的slave sentinelRedisInstance才有。
-            这两个属性不会传播给其他sentinel instance。后续还会提到SRI_PROMOTED用于在
-            sentinelFailoverDetectEnd和sentinelFailoverReconfNextSlave中skip掉某些逻辑的用途。
+        - 值得注意的是，ri->promoted_slave以及SRI_PROMOTED，只有进行某个master的failiover的
+        sentinel instance的该master sentinelRedisInstance struct里才会记录的相关状态，
+        SRI_PROMOTED只有该sentinel instance该master sentinelRedisInstance下的某个被选中
+        准备提升为master的slave sentinelRedisInstance才有。
+        这两个属性不会传播给其他sentinel instance。后续还会提到SRI_PROMOTED用于在
+        sentinelFailoverDetectEnd和sentinelFailoverReconfNextSlave中skip掉某些逻辑的用途。
 
     继续讲sentinelRefreshInstanceInfo的剩余部分，
 
