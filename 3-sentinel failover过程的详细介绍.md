@@ -273,7 +273,8 @@ SRI_S_DOWN在它之前撤销。
 ### **start failover & try failover**
 --------------------------------------
 
-这一节介绍将准备进入failover state machine之前的一些步骤，不涉及failover的执行流程, 涉及到投票过程，但本节不会涉及vote过程，关于vote后续会详细解释。
+这一节介绍将准备进入failover state machine之前的一些步骤，不涉及failover的执行流程, 
+涉及到投票过程，但本节不会涉及vote过程，关于vote后续会详细解释。
 
 ```
 /* src/sentinel.c */
@@ -289,7 +290,9 @@ SRI_S_DOWN在它之前撤销。
 3950     }
 3951 }
 ```
-整个failover的流程还是在sentinelHandleRedisInstance下。sentinelStartFailoverIfNeeded会不断检查failover是否进入sentinelStartFailover的逻辑。
+
+整个failover的流程还是在sentinelHandleRedisInstance下。
+sentinelStartFailoverIfNeeded会不断检查是否进入sentinelStartFailover的逻辑。
 
 ```
 /* src/sentinel.c */
@@ -323,11 +326,15 @@ SRI_S_DOWN在它之前撤销。
 3526     return 1;
 3527 }
 ```
+
 - master sentinelRedisInstance必须在SRI_O_DOWN状态
 
-- master sentinelRedisInstance的flags表明已经处于SRI_FAILOVER_IN_PROGRESS状态了。SRI_FAILOVER_IN_PROGRESS具体的逻辑后续会讲。
+- master sentinelRedisInstance的flags表明已经处于SRI_FAILOVER_IN_PROGRESS状态了。
+SRI_FAILOVER_IN_PROGRESS具体的逻辑后续会讲。
 
-- 距离上次master->failover_start_time更新超过master->failover_timeout*2的时间。failover_start_time的具体逻辑后续会解释。master->failover_delay_logged就是用来在此处记录master->failover_start_time用于输出log的逻辑。
+- 距离上次master->failover_start_time更新超过master->failover_timeout*2的时间。
+failover_start_time的具体逻辑后续会解释。master->failover_delay_logged就是用来
+在此处记录master->failover_start_time用于避免重复输出log的逻辑。
 
 上面三种情况下不满足的情况下返回0，否则则进入sentinelStartFailover的逻辑，并返回1。
 
@@ -354,9 +361,26 @@ SRI_S_DOWN在它之前撤销。
 3477     master->failover_state_change_time = mstime();
 3478 }
 ```
-首选检查了该sentinelRedisInstance struct的role必须是master。然后将master->failover_state = SENTINEL_FAILOVER_STATE_WAIT_START;，这是failover状态机的第一个状态。然后设置master->flags |= SRI_FAILOVER_IN_PROGRESS;SRI_FAILOVER_IN_PROGRESS表示的是该master sentinelRedisInstance struct正在进行failover的状态。然后此处更新master->failover_start_time为当前时间，用来避免在master->failover_timeout*2时间内重复对该master进行failover，这是更新master->failover_start_time的一个地方。并且也更新了master->failover_state_change_time，master->failover_state_change_time后续解释他的用途。另外sentinel.current_epoch，master->failover_epoch两个epoch后续也会统一解释。
 
-如果sentinelStartFailoverIfNeeded返回1，则会进入sentinelAskMasterStateToOtherSentinels(ri,SENTINEL_ASK_FORCED);的逻辑。另外即使没有返回1，对于master role的sentinelRedisInstance，也会常规的进行sentinelAskMasterStateToOtherSentinels(ri,SENTINEL_NO_FLAGS);的逻辑。SENTINEL_NO_FLAGS和SENTINEL_ASK_FORCED的区别只是用来控制紧急情况下的ask频率而已,现在这两个flag的用途也仅限于此。
+- 首选检查了该sentinelRedisInstance struct的role必须是master。
+
+- 然后将master->failover_state = SENTINEL_FAILOVER_STATE_WAIT_START;
+这是failover状态机的第一个状态。然后设置master->flags |= SRI_FAILOVER_IN_PROGRESS;
+SRI_FAILOVER_IN_PROGRESS表示的是该master sentinelRedisInstance struct正在进行failover的状态。
+
+- 然后此处更新master->failover_start_time为当前时间，用来避免在master->failover_timeout*2时间内
+重复对该master进行failover，**这是更新master->failover_start_time的一个地方。**
+
+- 并且也更新了master->failover_state_change_time，master->failover_state_change_time后续解释他的用途。
+另外sentinel.current_epoch，master->failover_epoch两个epoch后续也会统一解释。
+
+如果sentinelStartFailoverIfNeeded返回1，则会进入sentinelAskMasterStateToOtherSentinels(ri,SENTINEL_ASK_FORCED);
+的逻辑。另外即使没有返回1，对于master role的sentinelRedisInstance，也会常规的进行
+sentinelAskMasterStateToOtherSentinels(ri,SENTINEL_NO_FLAGS);的逻辑。
+SENTINEL_NO_FLAGS和SENTINEL_ASK_FORCED的区别只是用来控制紧急情况下的ask频率而已,
+讲解到目前为止这两个flag的用途也仅限于此。
+
+此处解释一下sentinelAskMasterStateToOtherSentinels的作用, 虽然后续还会提到，
 
 ```
 /* src/sentinel.c */
@@ -408,10 +432,14 @@ SRI_S_DOWN在它之前撤销。
 3233     dictReleaseIterator(di);
 3234 }
 ```
-这个函数的逻辑作用于master sentinelRedisInstance上挂载的sentinels sentinelRedisInstance struct，依次向这些sentinel sentinelRedisInstance所指向的sentinel instance发出is-master-down-by-addr cmd。
-如果距离上次更新ri->last_master_down_reply_time已经过去SENTINEL_ASK_PERIOD*5,则认为之前记录的SRI_MASTER_DOWN状态以及ri->leader信息过期失效。ri->leader后续会详细解释。SRI_MASTER_DOWN状态马上会介绍。
 
-在以下几种情况下，会跳过执行cmd。
+这个函数的逻辑作用于master sentinelRedisInstance上挂载的\*sentinels dict，
+依次向这些sentinel sentinelRedisInstance所指向的sentinel instance发出is-master-down-by-addr cmd。
+值得注意的是如果距离上次更新ri->last_master_down_reply_time已经过去SENTINEL_ASK_PERIOD*5,
+则无论如何认为之前记录的SRI_MASTER_DOWN状态以及ri->leader信息过期失效。
+ri->leader后续会详细解释。SRI_MASTER_DOWN状态马上会介绍。
+
+在以下几种情况下，会跳过执行SENTINEL is-master-down-by-addr cmd。
 
 - 如果我们关心的master sentinelRedisInstance的flags表示没有处于SRI_S_DOWN状态，就是sdown都不成立。
 
@@ -457,17 +485,24 @@ SRI_S_DOWN在它之前撤销。
 3185     }
 3186 }
 ```
-可以看到此处，此处针对合法的reply，更新了ri->last_master_down_reply_time，SRI_MASTER_DOWN状态以及ri->leader，ri->leader_epoch。
 
-可以看到ri->last_master_down_reply_time就是作用于此，记录最近一次该sentinel sentinelRedisInstance所指向的sentinel instance对is-master-down-by-addr cmd的回应时间。
+- 可以看到此处，此处针对合法的reply，更新了ri->last_master_down_reply_time，SRI_MASTER_DOWN状态
+以及ri->leader，ri->leader_epoch。
 
-第一个参数r->element[0]->integer是就是远程sentinel instance对master down状态的判断，所以直接存入该sentinel sentinelRedisInstance的SRI_MASTER_DOWN flag中。可以看到SRI_MASTER_DOWN的作用也仅仅在于此。
+- 可以看到ri->last_master_down_reply_time就是作用于此，记录最近一次该sentinel sentinelRedisInstance所指向
+的sentinel instance对is-master-down-by-addr cmd的回应时间。
 
-另外可以看到第二个返回参数r->element[1]->str，如果不是返回的"\*"这样的一个字符的话，则表明是一个vote reply。对应的可以看到之前(master->failover_state > SENTINEL_FAILOVER_STATE_NONE) ? server.runid : "\*"请求时的最后一个参数也是有区别的，如果failover_state大于SENTINEL_FAILOVER_STATE_NONE，则表明此时该sentinel正在进行failover急需其他sentinels的投票参与,最后一次请求参数会带上自己的runid，否则则是"*",用于常规性质的统计SRI_MASTER_DOWN状态而已。
+- 第一个参数r->element[0]->integer是就是远程sentinel instance对master down状态的判断，
+所以直接存入该sentinel sentinelRedisInstance的SRI_MASTER_DOWN flag中。可以看到SRI_MASTER_DOWN的作用也仅仅在于此。
 
-关于ri->leader,ri->leader_epoch后续会详细解释，从此处看来，两者的用途是记录sentinel sentinelRedisInstance的投票信息。
+- 另外可以看到第二个返回参数r->element[1]->str，如果不是返回的"\*"这样的一个字符的话，则表明是一个vote reply。
+对应的可以看到之前(master->failover_state > SENTINEL_FAILOVER_STATE_NONE) ? server.runid : "\*"这个请求时的
+最后一个参数也是有区别的，如果failover_state大于SENTINEL_FAILOVER_STATE_NONE，则表明此时该sentinel正在进行failover
+急需其他sentinels的投票参与,最后一个请求参数会带上自己的runid，否则则是"*",用于常规性质的统计SRI_MASTER_DOWN状态而已。
 
-看一下sentinel instance对is-master-down-by-addr的reply逻辑，
+- 关于ri->leader,ri->leader_epoch后续会详细解释，从此处看来，两者的用途是记录sentinel sentinelRedisInstance的投票信息。
+
+然后来看一下other sentinel instance对is-master-down-by-addr的reply逻辑，
 
 ```
 /* src/sentinel.c */
@@ -501,11 +536,14 @@ SRI_S_DOWN在它之前撤销。
 
 - 可以看到首先通过ip，port去sentinel.masters查找相应的master sentinelRedisInstance.
 
-- 如果找不到，则不回应关于down关于vote的任何有效的信息。
+- 如果找不到或者找到的sentinelRedisInstance不是master role，则不回应关于down及关于vote的任何有效的信息。
 
-- 如果找到，则如果该sentinelRedisInstance是role为master，并且处于SRI_S_DOWN状态，则回复down为1
+- 如果找到，则如果该sentinelRedisInstance是role为master，并且处于SRI_S_DOWN状态，则回复down为1.
 
-- 并且针对要求投票的请求，回复投票信息.sentinelVoteLeader的细节后续会详细解释。现在可以稍微注意一下的是，这些投票信息是在master sentinelRedisInstance上或者sentinel这个global struct上的。
+- 并且针对要求投票的请求，回复投票信息.
+
+sentinelVoteLeader的细节后续会详细解释。现在可以稍微注意一下的是，这些在此次failover中充当
+观察者角色的sentinel的这些投票信息是在当前master sentinelRedisInstance上或者sentinel这个global struct上的。
 
 ### **sentinel failover stateMachine**
 --------------------------------------
