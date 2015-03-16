@@ -1266,7 +1266,10 @@ sentinelVoteLeader的细节后续会详细解释。现在可以稍微注意一�
 ### **after failover end success**
 ----------------------------------
 
-SENTINEL_FAILOVER_STATE_UPDATE_CONFIG之后，就是failover主要流程结束后的一些config操作,在本sentinel instance的old master sentinelRedisInstance stuct以及promoted_slave sentinelRedisInstance stuct都还未被重新config。并且此failover产生的这些变动也还未被广播出去，有关广播出去这部分内容这节估计会带过.
+failover_state到达SENTINEL_FAILOVER_STATE_UPDATE_CONFIG之后，就是failover主要流程结束后
+的一些config操作,在本sentinel instance的old master sentinelRedisInstance stuct以及
+promoted_slave sentinelRedisInstance stuct都还未被重新config。并且此failover产生的这些变动
+也还未正式通过pubsub被广播出去，有关广播出去这部分内容这节估计会带过.
 
 这部分操作是在sentinelHandleDictOfRedisInstances进行的。
 
@@ -1299,9 +1302,13 @@ SENTINEL_FAILOVER_STATE_UPDATE_CONFIG之后，就是failover主要流程结束�
 3977 }
 ```
 
-sentinelHandleDictOfRedisInstances的递归调用的，并且是在sentinelTimer中直接调用的，参数是sentinel.masters。
+简单提一下，sentinelHandleDictOfRedisInstances是递归调用的，并且是在sentinelTimer中
+直接调用的，参数是sentinel.masters。
 
-如果某一个master sentinelRedisInstance的failover_state处于SENTINEL_FAILOVER_STATE_UPDATE_CONFIG状态，则在该master sentinelRedisInstance执行sentinelFailoverSwitchToPromotedSlave逻辑，可以看到一次sentinelHandleDictOfRedisInstances调用，只会有一个failover_state处于SENTINEL_FAILOVER_STATE_UPDATE_CONFIG的master sentinelRedisInstance会被处理。
+如果某一个master sentinelRedisInstance的failover_state处于SENTINEL_FAILOVER_STATE_UPDATE_CONFIG状态，
+则在该master sentinelRedisInstance上执行sentinelFailoverSwitchToPromotedSlave逻辑，
+可以看到一次sentinelHandleDictOfRedisInstances调用，只会有一个failover_state处于
+SENTINEL_FAILOVER_STATE_UPDATE_CONFIG的master sentinelRedisInstance会被处理。
 
 ```
 /* src/sentinel.c */
@@ -1320,7 +1327,12 @@ sentinelHandleDictOfRedisInstances的递归调用的，并且是在sentinelTimer
 3868     sentinelResetMasterAndChangeAddress(master,ref->addr->ip,ref->addr->port);
 3869 }
 ```
-此函数输出了我们最关心的+switch-master message，后续会详细解释。**此处ref = master->promoted_slave ?  master->promoted_slave : master;的逻辑，我个人认为是多余的master->promoted_slave肯定为真，不知作者的考虑是什么,还是说是一个无关紧要的mistake**。接下来详细解释一下sentinelResetMasterAndChangeAddress函数,
+
+此函数输出了我们最关心的+switch-master message，后续会详细解释。
+**此处ref = master->promoted_slave ?  master->promoted_slave : master;的逻辑，我个人认为是多余的,
+master->promoted_slave肯定为真，不知作者的考虑是什么,还是说是一个无关紧要的mistake.**
+
+接下来详细解释一下sentinelResetMasterAndChangeAddress函数,
 
 ```
 /* src/sentinel.c */
@@ -1379,22 +1391,33 @@ sentinelHandleDictOfRedisInstances的递归调用的，并且是在sentinelTimer
 1277     zfree(slaves);
 ```
 
-除去sentinelResetMaster(master,SENTINEL_RESET_NO_SENTINELS);的逻辑暂时不说，这个func主要做了以下几件事。
+除去sentinelResetMaster(master,SENTINEL_RESET_NO_SENTINELS);的逻辑暂时不说，
+这个func主要做了以下几件事。
 
-- 先将master sentinelRedisInstance下挂载的所有slave sentinelRedisInstance backup到local slaves中，除去switch to的promoted_slave外。
+- 先将master sentinelRedisInstance下挂载的所有slave sentinelRedisInstance
+backup到local slaves中，除去switch to的promoted_slave外。
 
-- 将现有old master sentinelRedisInstance也加入到local slaves中，如果old master的addr同switch to 的addr不同的话。包括sentinelAddrIsEqual在内的这一系列sentinelAddr函数很简单，我就任性一把，不讲了.
+- 将现有old master sentinelRedisInstance也加入到local slaves中，前提是如果old master的addr同switch to 的addr不同的话。
+包括sentinelAddrIsEqual在内的这一系列sentinelAddr函数很简单，我就任性一把，不讲了.
 
-- backup到slaves做好之后，调用sentinelResetMaster该master sentinelRedisInstance，并且将该master sentinelRedisInstance的addr替换为新的switch to的addr。并且重置master->o_down_since_time，master->s_down_since_time两个属性。至此之前的master sentinelRedisInstance已从old master的配置切换到switch to 的new master配置。**值得注意的是sentinelResetMaster中的一个重要逻辑是将ri->failover_state重置为 SENTINEL_FAILOVER_STATE_NONE,表示全部退出failover的流程，恢复到正常状态。**
+- backup到slaves做好之后，调用sentinelResetMaster该master sentinelRedisInstance，并且将该
+master sentinelRedisInstance的addr替换为新的switch to的addr。并且重置
+master->o_down_since_time，master->s_down_since_time两个属性。至此之前的master sentinelRedisInstance已从
+old master的配置切换到switch to的new master配置。
+**值得注意的是sentinelResetMaster中的一个重要逻辑是将ri->failover_state重置为SENTINEL_FAILOVER_STATE_NONE,
+表示当前sentinel当前master由此处全部退出failover的流程，该master sentinelRedisInstance恢复到正常状态。**
 
-- iter刚才backup的local slaves，全部重新创建slave sentinelRedisInstance并挂载在master sentinelRedisInstance下。至此此sentinel下的该master sentinelRedisInstance以及其slave sentinelRedisInstance的状态都重置了一遍，注意SENTINEL_RESET_NO_SENTINELS表示并没有更新任何该master sentinelRedisInstance下挂载的sentinel sentinelRedisInstance。
+- iter刚才backup的local slaves，全部重新创建slave sentinelRedisInstance并挂载在master sentinelRedisInstance下。
+至此此sentinel下的该master sentinelRedisInstance以及其slave sentinelRedisInstance的状态都重置了一遍，
+注意SENTINEL_RESET_NO_SENTINELS表示并没有更新任何该master sentinelRedisInstance下挂载的sentinel sentinelRedisInstance。
 
 至此，sentinelHandleDictOfRedisInstances也就介绍完了，并且failover状态机的大部分内容已经讲完。
 
 ### **failover end fail**
 -------------------------
 
-上面的章节分阶段讲了sentinel failover success的唯一路径，但是sentinel failover中失败会有很多路径。还是分阶段讲在每个阶段失败的可能性.
+上面的章节分阶段讲了sentinel failover success的唯一路径，但是sentinel failover中失败会有很多路径。
+还是分阶段讲一下在每个阶段失败的可能性.
 
 首先提一下failover_state_change_time这个属性，
 
@@ -1438,193 +1461,233 @@ sentinelHandleDictOfRedisInstances的递归调用的，并且是在sentinelTimer
 3906     ri->failover_state_change_time = mstime();
 ```
 
-可以看到failover_state_change_time这个属性在任何failover_state变更的地方都会随之变更，除了变更为SENTINEL_FAILOVER_STATE_NONE会将failover_state_change_time置为0之外，都是置为mstime()，这些变更是干嘛的呢，马上会提到。
+可以看到failover_state_change_time这个属性在任何failover_state变更的地方都会随之变更，
+除了变更为SENTINEL_FAILOVER_STATE_NONE会将failover_state_change_time置为0之外，都是置为mstime()，
+这些变更是干嘛的呢，马上会提到。
 
-首先定义所谓failover fail终止提到的是，这些fail逻辑下，会采取一些措施，阻止failover流程稍后继续重试，如sentinelAbortFailover等，而如果是那种直接return的逻辑，后续还是会从该阶段往后重试，这种类型的暂时终止在内。
+首先提一下，failover的流程终止的情况，有两种，
 
-**SENTINEL_FAILOVER_STATE_NONE -> SENTINEL_FAILOVER_STATE_WAIT_START**
+- 在一些fail逻辑下，会采取一些措施，阻止failover流程稍后继续重试，如sentinelabortfailover,
+如强行达到failover-end,如+failover-end-for-timeout.
 
-这个阶段会有一些条件阻止failover_state的提升，即正式进入failover流程。但是由于还没进入failover的流程，这一阶段的失败并不能算是failover的failover终止.
+- 而如果是在某个阶段的某个func return跳过该func后续逻辑这种情况，则后续还是会从该阶段往后重试
 
-**SENTINEL_FAILOVER_STATE_WAIT_START -> SENTINEL_FAILOVER_STATE_SELECT_SLAVE**
+然后正式开始介绍各个阶段可能出现的fail。
 
-```
-/* src/sentinel.c */
-3632 /* ---------------- Failover state machine implementation ------------------- */
-3633 void sentinelFailoverWaitStart(sentinelRedisInstance *ri) {
-3634     char *leader;
-3635     int isleader;
-3636
-3637     /* Check if we are the leader for the failover epoch. */
-3638     leader = sentinelGetLeader(ri, ri->failover_epoch);
-3639     isleader = leader && strcasecmp(leader,server.runid) == 0;
-3640     sdsfree(leader);
-3641
-3642     /* If I'm not the leader, and it is not a forced failover via
-3643      * SENTINEL FAILOVER, then I can't continue with the failover. */
-3644     if (!isleader && !(ri->flags & SRI_FORCE_FAILOVER)) {
-3645         int election_timeout = SENTINEL_ELECTION_TIMEOUT;
-3646
-3647         /* The election timeout is the MIN between SENTINEL_ELECTION_TIMEOUT
-3648          * and the configured failover timeout. */
-3649         if (election_timeout > ri->failover_timeout)
-3650             election_timeout = ri->failover_timeout;
-3651         /* Abort the failover if I'm not the leader after some time. */
-3652         if (mstime() - ri->failover_start_time > election_timeout) {
-3653             sentinelEvent(REDIS_WARNING,"-failover-abort-not-elected",ri,"%@ %llu",
-3654                 (unsigned long long) ri->failover_epoch);
-3655
-3656             sentinelAbortFailover(ri);
-3657         }
-3658         return;
-3659     }
-```
+- **SENTINEL_FAILOVER_STATE_NONE -> SENTINEL_FAILOVER_STATE_WAIT_START**
 
-可以看到如果sentinelGetLeader统计出的该次failover_epoch的failover的leader不是当前sentinel。并且也不是SRI_FORCE_FAILOVER这种强制人工指定failover的状态，则给出了一个min(SENTINEL_ELECTION_TIMEOUT, ri->failover_timeout)的election_timeout时间,SENTINEL_ELECTION_TIMEOUT默认是10s， 如果ri->failover_start_time距今已经超过election_timeout时间，则认为这么长时间内，当前sentinel选举失败，要么就是选票被别人拿走了，要么就是大家都没成为大多数等等情况，则算-failover-abort-not-elected，并且sentinelAbortFailover。关于vote以及failover_start_time的细节，后续会详细解释。
+    这个阶段会有一些条件阻止failover_state的提升，即正式进入failover流程。但是由于还没进入failover的流程，
+    这一阶段的fail并不能算是failover终止.
 
-**SENTINEL_FAILOVER_STATE_SELECT_SLAVE -> SENTINEL_FAILOVER_STATE_SEND_SLAVEOF_NOONE**
+- **SENTINEL_FAILOVER_STATE_WAIT_START -> SENTINEL_FAILOVER_STATE_SELECT_SLAVE**
 
-```
-/* src/sentinel.c */
-3668 void sentinelFailoverSelectSlave(sentinelRedisInstance *ri) {
-3669     sentinelRedisInstance *slave = sentinelSelectSlave(ri);
-3670
-3671     /* We don't handle the timeout in this state as the function aborts
-3672      * the failover or go forward in the next state. */
-3673     if (slave == NULL) {
-3674         sentinelEvent(REDIS_WARNING,"-failover-abort-no-good-slave",ri,"%@ %llu",
-3675             (unsigned long long) ri->failover_epoch);
-3676         sentinelAbortFailover(ri);
-```
+    ```
+    /* src/sentinel.c */
+    3632 /* ---------------- Failover state machine implementation ------------------- */
+    3633 void sentinelFailoverWaitStart(sentinelRedisInstance *ri) {
+    3634     char *leader;
+    3635     int isleader;
+    3636
+    3637     /* Check if we are the leader for the failover epoch. */
+    3638     leader = sentinelGetLeader(ri, ri->failover_epoch);
+    3639     isleader = leader && strcasecmp(leader,server.runid) == 0;
+    3640     sdsfree(leader);
+    3641
+    3642     /* If I'm not the leader, and it is not a forced failover via
+    3643      * SENTINEL FAILOVER, then I can't continue with the failover. */
+    3644     if (!isleader && !(ri->flags & SRI_FORCE_FAILOVER)) {
+    3645         int election_timeout = SENTINEL_ELECTION_TIMEOUT;
+    3646
+    3647         /* The election timeout is the MIN between SENTINEL_ELECTION_TIMEOUT
+    3648          * and the configured failover timeout. */
+    3649         if (election_timeout > ri->failover_timeout)
+    3650             election_timeout = ri->failover_timeout;
+    3651         /* Abort the failover if I'm not the leader after some time. */
+    3652         if (mstime() - ri->failover_start_time > election_timeout) {
+    3653             sentinelEvent(REDIS_WARNING,"-failover-abort-not-elected",ri,"%@ %llu",
+    3654                 (unsigned long long) ri->failover_epoch);
+    3655
+    3656             sentinelAbortFailover(ri);
+    3657         }
+    3658         return;
+    3659     }
+    ```
 
-可以看到如果此处sentinelSelectSlave选不出来合格的slave，则算-failover-abort-no-good-slave，并且sentinelAbortFailover。
+    可以看到如果sentinelGetLeader统计出的该次failover_epoch的failover的leader不是当前sentinel。
+    并且也不是SRI_FORCE_FAILOVER这种强制failover的状态，则给出了一个
+    min(SENTINEL_ELECTION_TIMEOUT, ri->failover_timeout)的election_timeout时间,
+    SENTINEL_ELECTION_TIMEOUT默认是10s， 如果ri->failover_start_time距今已经超过election_timeout时间，
+    则认为这么长一段时间内，当前sentinel的选举还未获得成功，要么就是选票被别人拿走了，要么就是大家都没成为大多数等情况，
+    则算-failover-abort-not-elected，并且sentinelAbortFailover。关于vote以及failover_start_time的细节，后续会详细解释。
 
-**SENTINEL_FAILOVER_STATE_SEND_SLAVEOF_NOONE -> SENTINEL_FAILOVER_STATE_WAIT_PROMOTION**
+- **SENTINEL_FAILOVER_STATE_SELECT_SLAVE -> SENTINEL_FAILOVER_STATE_SEND_SLAVEOF_NOONE**
 
-```
-/* src/sentinel.c */
-3688 void sentinelFailoverSendSlaveOfNoOne(sentinelRedisInstance *ri) {
-3689     int retval;
-3690
-3691     /* We can't send the command to the promoted slave if it is now
-3692      * disconnected. Retry again and again with this state until the timeout
-3693      * is reached, then abort the failover. */
-3694     if (ri->promoted_slave->flags & SRI_DISCONNECTED) {
-3695         if (mstime() - ri->failover_state_change_time > ri->failover_timeout) {
-3696             sentinelEvent(REDIS_WARNING,"-failover-abort-slave-timeout",ri,"%@ %llu",
-3697                 (unsigned long long) ri->failover_epoch);
-3698
-3699             sentinelAbortFailover(ri);
-3700         }
-3701         return;
-3702     }
-```
-可以看到此阶段如果ri->promoted_slave处于SRI_DISCONNECTED，并且距离上一次更新ri->failover_state_change_time已经超过ri->failover_timeout，则算-failover-abort-slave-timeout，并sentinelAbortFailover。
-  
-**SENTINEL_FAILOVER_STATE_WAIT_PROMOTION -> SENTINEL_FAILOVER_STATE_RECONF_SLAVES**
+    ```
+    /* src/sentinel.c */
+    3668 void sentinelFailoverSelectSlave(sentinelRedisInstance *ri) {
+    3669     sentinelRedisInstance *slave = sentinelSelectSlave(ri);
+    3670
+    3671     /* We don't handle the timeout in this state as the function aborts
+    3672      * the failover or go forward in the next state. */
+    3673     if (slave == NULL) {
+    3674         sentinelEvent(REDIS_WARNING,"-failover-abort-no-good-slave",ri,"%@ %llu",
+    3675             (unsigned long long) ri->failover_epoch);
+    3676         sentinelAbortFailover(ri);
+    ```
 
-```
-/* src/sentinel.c */
-3716 /* We actually wait for promotion indirectly checking with INFO when the
-3717  * slave turns into a master. */
-3718 void sentinelFailoverWaitPromotion(sentinelRedisInstance *ri) {
-3719     /* Just handle the timeout. Switching to the next state is handled
-3720      * by the function parsing the INFO command of the promoted slave. */
-3721     if (mstime() - ri->failover_state_change_time > ri->failover_timeout) {
-3722         sentinelEvent(REDIS_WARNING,"-failover-abort-slave-timeout",ri,"%@ %llu",
-3723             (unsigned long long) ri->failover_epoch);
-3724
-3725         sentinelAbortFailover(ri);
-3726     }
-3727 }
-```
-可以看到这里的主要逻辑就是判断进入这个failover_state后，上次ri->failover_state_change_time更新也几乎是在同时，如果距离上次ri->failover_state_change_time更新时间已经超过ri->failover_timeout，则算-failover-abort-slave-timeout，并sentinelAbortFailover。
+    可以看到如果此处sentinelSelectSlave选不出来合格的slave，则算-failover-abort-no-good-slave，并且sentinelAbortFailover。
 
-**SENTINEL_FAILOVER_STATE_RECONF_SLAVES -> SENTINEL_FAILOVER_STATE_UPDATE_CONFIG**
+- **SENTINEL_FAILOVER_STATE_SEND_SLAVEOF_NOONE -> SENTINEL_FAILOVER_STATE_WAIT_PROMOTION**
 
-```
-/* src/sentinel.c */
-3795 /* Send SLAVE OF <new master address> to all the remaining slaves that
-3796  * still don't appear to have the configuration updated. */
-3797 void sentinelFailoverReconfNextSlave(sentinelRedisInstance *master) {
-3821         /* If too much time elapsed without the slave moving forward to
-3822          * the next state, consider it reconfigured even if it is not.
-3823          * Sentinels will detect the slave as misconfigured and fix its
-3824          * configuration later. */
-3825         if ((slave->flags & SRI_RECONF_SENT) &&
-3826             (mstime() - slave->slave_reconf_sent_time) >
-3827             SENTINEL_SLAVE_RECONF_TIMEOUT)
-3828         {
-3829             sentinelEvent(REDIS_NOTICE,"-slave-reconf-sent-timeout",slave,"%@");
-3830             slave->flags &= ~SRI_RECONF_SENT;
-3831             slave->flags |= SRI_RECONF_DONE;
-3832         }
-3833
-3834         /* Nothing to do for instances that are disconnected or already
-3835          * in RECONF_SENT state. */
-3836         if (slave->flags & (SRI_DISCONNECTED|SRI_RECONF_SENT|SRI_RECONF_INPROG))
-3837             continue;
-```
+    ```
+    /* src/sentinel.c */
+    3688 void sentinelFailoverSendSlaveOfNoOne(sentinelRedisInstance *ri) {
+    3689     int retval;
+    3690
+    3691     /* We can't send the command to the promoted slave if it is now
+    3692      * disconnected. Retry again and again with this state until the timeout
+    3693      * is reached, then abort the failover. */
+    3694     if (ri->promoted_slave->flags & SRI_DISCONNECTED) {
+    3695         if (mstime() - ri->failover_state_change_time > ri->failover_timeout) {
+    3696             sentinelEvent(REDIS_WARNING,"-failover-abort-slave-timeout",ri,"%@ %llu",
+    3697                 (unsigned long long) ri->failover_epoch);
+    3698
+    3699             sentinelAbortFailover(ri);
+    3700         }
+    3701         return;
+    3702     }
+    ```
 
-这里有一个timeout检查，但是不是我们定义的failover fail, 如果该slave sentinelRedisInstance的flags表明正处于SRI_RECONF_SENT状态，并且该slave sentinelRedisInstance的slave_reconf_sent_time距今已经超过SENTINEL_SLAVE_RECONF_TIMEOUT这么长时间了，没有被提升为SRI_RECONF_xx后续状态了（slave->flags置为SRI_RECONF_SENT同更新slave->slave_reconf_sent_time几乎是同时发生的），则无论如何将slave->flags由SRI_RECONF_SENT直接提升为SRI_RECONF_DONE状态。并且产生-slave-reconf-sent-timeout这样一个失败message。fix操作留给其他逻辑,之前已经提过了。
+    可以看到此阶段如果ri->promoted_slave处于SRI_DISCONNECTED，并且距离上一次
+    更新ri->failover_state_change_time已经超过ri->failover_timeout，则
+    算-failover-abort-slave-timeout，并sentinelAbortFailover。
 
-```
-/* src/sentinel.c */
-3729 void sentinelFailoverDetectEnd(sentinelRedisInstance *master) {
-3733     mstime_t elapsed = mstime() - master->failover_state_change_time;
+- **SENTINEL_FAILOVER_STATE_WAIT_PROMOTION -> SENTINEL_FAILOVER_STATE_RECONF_SLAVES**
 
-3752     /* Force end of failover on timeout. */
-3753     if (elapsed > master->failover_timeout) {
-3754         not_reconfigured = 0;
-3755         timeout = 1;
-3756         sentinelEvent(REDIS_WARNING,"+failover-end-for-timeout",master,"%@ %llu",
-3757             (unsigned long long) master->failover_epoch);
-3758     }
+    ```
+    /* src/sentinel.c */
+    3716 /* We actually wait for promotion indirectly checking with INFO when the
+    3717  * slave turns into a master. */
+    3718 void sentinelFailoverWaitPromotion(sentinelRedisInstance *ri) {
+    3719     /* Just handle the timeout. Switching to the next state is handled
+    3720      * by the function parsing the INFO command of the promoted slave. */
+    3721     if (mstime() - ri->failover_state_change_time > ri->failover_timeout) {
+    3722         sentinelEvent(REDIS_WARNING,"-failover-abort-slave-timeout",ri,"%@ %llu",
+    3723             (unsigned long long) ri->failover_epoch);
+    3724
+    3725         sentinelAbortFailover(ri);
+    3726     }
+    3727 }
+    ```
 
-3760     if (not_reconfigured == 0) {
-3761         sentinelEvent(REDIS_WARNING,"+failover-end",master,"%@ %llu",
-3762             (unsigned long long) master->failover_epoch);
-3763
-3764         master->failover_state = SENTINEL_FAILOVER_STATE_UPDATE_CONFIG;
-3765         master->failover_state_change_time = mstime();
-3766     }
-  
-3768     /* If I'm the leader it is a good idea to send a best effort SLAVEOF
-3769      * command to all the slaves still not reconfigured to replicate with
-3770      * the new master. */
-3771     if (timeout) {
-3772         dictIterator *di;
-3773         dictEntry *de;
-3774
-3775         di = dictGetIterator(master->slaves);
-3776         while((de = dictNext(di)) != NULL) {
-3777             sentinelRedisInstance *slave = dictGetVal(de);
-3778             int retval;
-3779
-3780             if (slave->flags &
-3781                 (SRI_RECONF_DONE|SRI_RECONF_SENT|SRI_DISCONNECTED)) continue;
-3782
-3783             retval = sentinelSendSlaveOf(slave,
-3784                     master->promoted_slave->addr->ip,
-3785                     master->promoted_slave->addr->port);
-3786             if (retval == REDIS_OK) {
-3787                 sentinelEvent(REDIS_NOTICE,"+slave-reconf-sent-be",slave,"%@");
-3788                 slave->flags |= SRI_RECONF_SENT;
-3789             }
-3790         }
-3791         dictReleaseIterator(di);
-3792     }  
-```
+    可以看到这里的主要逻辑就是判断进入这个failover_state后，上次ri->failover_state_change_time更新
+    也几乎是在同时，如果距离上次ri->failover_state_change_time更新时间已经超过ri->failover_timeout，
+    则算-failover-abort-slave-timeout，并sentinelAbortFailover。
 
-sentinelFailoverDetectEnd异常的逻辑就是，如果自上次更新failover_state_change_time已经超过master->failover_timeout这么长时间，**则强制将not_reconfigured赋值为0，将该次failover按照后续的正常+failover-end逻辑处理，但是输出+failover-end-for-timeout message。这里看起来是个特殊情况,之前没有注意到，需要处理, TODO，目前为止，+failover-end-for-timeout还没在测试情况下发生过. 不过此时failover_state肯定已经到达SENTINEL_FAILOVER_STATE_RECONF_SLAVES状态，表示的是对new master的提升操作已经完成，但是old master的剩余slave还不一定被完全reconfig,不能算作是失败的failover，不能就此中断failover，对于没有完成的操作，其他逻辑后续会fix。**
+- **SENTINEL_FAILOVER_STATE_RECONF_SLAVES -> SENTINEL_FAILOVER_STATE_UPDATE_CONFIG**
 
-另外此处还有一个best effort操作，如果是+failover-end-for-timeout的情况，则给所有不是SRI_RECONF_DONE|SRI_RECONF_SENT|SRI_DISCONNECTED状态的，发送最后一次sentinelSendSlaveOf，并标记flags为SRI_RECONF_SENT。为什么是最后一次，因为上面的逻辑是如果是timeout为true，则一定会进入+failover-end的逻辑，failover_state由SENTINEL_FAILOVER_STATE_RECONF_SLAVES提升为SENTINEL_FAILOVER_STATE_UPDATE_CONFIG状态，则此sentinelFailoverDetectEnd不会被再次重试。
+    ```
+    /* src/sentinel.c */
+    3795 /* Send SLAVE OF <new master address> to all the remaining slaves that
+    3796  * still don't appear to have the configuration updated. */
+    3797 void sentinelFailoverReconfNextSlave(sentinelRedisInstance *master) {
+    3821         /* If too much time elapsed without the slave moving forward to
+    3822          * the next state, consider it reconfigured even if it is not.
+    3823          * Sentinels will detect the slave as misconfigured and fix its
+    3824          * configuration later. */
+    3825         if ((slave->flags & SRI_RECONF_SENT) &&
+    3826             (mstime() - slave->slave_reconf_sent_time) >
+    3827             SENTINEL_SLAVE_RECONF_TIMEOUT)
+    3828         {
+    3829             sentinelEvent(REDIS_NOTICE,"-slave-reconf-sent-timeout",slave,"%@");
+    3830             slave->flags &= ~SRI_RECONF_SENT;
+    3831             slave->flags |= SRI_RECONF_DONE;
+    3832         }
+    3833
+    3834         /* Nothing to do for instances that are disconnected or already
+    3835          * in RECONF_SENT state. */
+    3836         if (slave->flags & (SRI_DISCONNECTED|SRI_RECONF_SENT|SRI_RECONF_INPROG))
+    3837             continue;
+    ```
 
-**SENTINEL_FAILOVER_STATE_UPDATE_CONFIG -> SENTINEL_FAILOVER_STATE_NONE**
+    - 该slave sentinelRedisInstance的flags表明正处于SRI_RECONF_SENT状态，
 
-此阶段情况没有那么复杂，基本不会有abort的状态。
+    - 并且该slave sentinelRedisInstance的slave_reconf_sent_time距今已经超过SENTINEL_SLAVE_RECONF_TIMEOUT这么
+    长时间了，没有被提升为SRI_RECONF_xx后续状态了(slave->flags置为SRI_RECONF_SENT同
+    更新slave->slave_reconf_sent_time几乎是同时发生的)，
 
+    则无论如何将slave->flags由SRI_RECONF_SENT直接提升为SRI_RECONF_DONE状态。并且
+    产生-slave-reconf-sent-timeout这样一个失败message。如需fix操作留给其他逻辑,之前已经提过了。
 
-至此可以看到failover_state_change_time和failover_timeout这对孪生兄弟就是用于判断自上次failover_state_change_time更新以来是否过去了已经超过failover_timeout这么长时间，是的话，则做上诉提到的一些timeout处理。所以failover_timeout这个配置不是控制整个流程的timeout的，而是某些failover阶段的timeout。
+    ```
+    /* src/sentinel.c */
+    3729 void sentinelFailoverDetectEnd(sentinelRedisInstance *master) {
+    3733     mstime_t elapsed = mstime() - master->failover_state_change_time;
+
+    3752     /* Force end of failover on timeout. */
+    3753     if (elapsed > master->failover_timeout) {
+    3754         not_reconfigured = 0;
+    3755         timeout = 1;
+    3756         sentinelEvent(REDIS_WARNING,"+failover-end-for-timeout",master,"%@ %llu",
+    3757             (unsigned long long) master->failover_epoch);
+    3758     }
+
+    3760     if (not_reconfigured == 0) {
+    3761         sentinelEvent(REDIS_WARNING,"+failover-end",master,"%@ %llu",
+    3762             (unsigned long long) master->failover_epoch);
+    3763
+    3764         master->failover_state = SENTINEL_FAILOVER_STATE_UPDATE_CONFIG;
+    3765         master->failover_state_change_time = mstime();
+    3766     }
+
+    3768     /* If I'm the leader it is a good idea to send a best effort SLAVEOF
+    3769      * command to all the slaves still not reconfigured to replicate with
+    3770      * the new master. */
+    3771     if (timeout) {
+    3772         dictIterator *di;
+    3773         dictEntry *de;
+    3774
+    3775         di = dictGetIterator(master->slaves);
+    3776         while((de = dictNext(di)) != NULL) {
+    3777             sentinelRedisInstance *slave = dictGetVal(de);
+    3778             int retval;
+    3779
+    3780             if (slave->flags &
+    3781                 (SRI_RECONF_DONE|SRI_RECONF_SENT|SRI_DISCONNECTED)) continue;
+    3782
+    3783             retval = sentinelSendSlaveOf(slave,
+    3784                     master->promoted_slave->addr->ip,
+    3785                     master->promoted_slave->addr->port);
+    3786             if (retval == REDIS_OK) {
+    3787                 sentinelEvent(REDIS_NOTICE,"+slave-reconf-sent-be",slave,"%@");
+    3788                 slave->flags |= SRI_RECONF_SENT;
+    3789             }
+    3790         }
+    3791         dictReleaseIterator(di);
+    3792     }
+    ```
+
+    sentinelFailoverDetectEnd异常的逻辑就是，如果自上次更新failover_state_change_time已经
+    超过master->failover_timeout这么长时间，**则强制将not_reconfigured赋值为0，将该次failover按照
+    后续的正常+failover-end逻辑处理，但是输出+failover-end-for-timeout message。这里看起来是个特殊情况,
+    之前没有注意到，需要处理, TODO，目前为止，+failover-end-for-timeout还没在测试情况下发生过.
+    不过此时failover_state肯定已经到达SENTINEL_FAILOVER_STATE_RECONF_SLAVES状态，表示的是对new master的提升操作
+    已经完成，但是old master的剩余slave还不一定被完全reconfig,不能算作是失败的failover，不能就此中断failover，
+    对于没有完成的操作，其他逻辑后续会fix。**
+
+    另外此处还有一个best effort操作，如果是+failover-end-for-timeout的情况，则给所有
+    不是SRI_RECONF_DONE|SRI_RECONF_SENT|SRI_DISCONNECTED状态的，发送最后一次sentinelSendSlaveOf，
+    并标记flags为SRI_RECONF_SENT。为什么是最后一次，因为上面的逻辑是如果是timeout为true，则一定会进入+failover-end的逻辑，
+    failover_state由SENTINEL_FAILOVER_STATE_RECONF_SLAVES提升为SENTINEL_FAILOVER_STATE_UPDATE_CONFIG状态，
+    则此sentinelFailoverDetectEnd不会被再次重试。
+
+- **SENTINEL_FAILOVER_STATE_UPDATE_CONFIG -> SENTINEL_FAILOVER_STATE_NONE**
+
+    此阶段情况没有那么复杂，基本不会有abort的状态。
+
+至此可以看到failover_state_change_time和failover_timeout这对孪生兄弟就是用于判断自
+上次failover_state_change_time更新以来是否过去了已经超过failover_timeout这么长时间，是的话，
+则做上诉提到的一些timeout处理。所以failover_timeout这个配置不是控制整个流程的timeout的，
+而是一些特定failover阶段的timeout。
 
 至此，failover的主要流程已经讲完了。
