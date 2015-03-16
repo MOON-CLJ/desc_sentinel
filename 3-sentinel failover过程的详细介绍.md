@@ -1,8 +1,8 @@
 ## **sentinel failover过程的详细介绍**
 --------------------------------------
 
-### **发现异常sdown，odown**
---------------------------
+### **发现异常sdown及odown**
+----------------------------
 这一章节介绍sentinelHandleRedisInstance里的另外两个函数
 
 ```
@@ -15,9 +15,12 @@
 3944     if (ri->flags & SRI_MASTER) {
 3945         sentinelCheckObjectivelyDown(ri);
 ```
-可以看出来sentinelCheckSubjectivelyDown可以作用于master,slave,sentinel任意一种role的sentinelRedisInstance上，而sentinelCheckObjectivelyDown仅能作用于master role的sentinelRedisInstance上。
 
-- sentinelCheckSubjectivelyDown
+可以看出来sentinelCheckSubjectivelyDown可以作用于master,slave,sentinel任意一种role的
+sentinelRedisInstance上，而sentinelCheckObjectivelyDown仅作用于master role
+的sentinelRedisInstance上。
+
+先讲一下sentinelCheckSubjectivelyDown,
 
 ```
 /* src/sentinel.c */
@@ -58,60 +61,64 @@
 3078     }
 ```
 
-sentinelCheckSubjectivelyDown的前半部分主要是kill link以供重连的逻辑。
+sentinelCheckSubjectivelyDown的前半部分主要是kill cc或者pc link以供重连的逻辑。
 
-检查command link需要重连：
+检查cc link需要重连,
 
-	- 如果距离上次试图connect的ri->cc_conn_time已经过了SENTINEL_MIN_LINK_RECONNECT_PERIOD,SENTINEL_MIN_LINK_RECONNECT_PERIOD默认为15s，也仅仅用于此作用。
-	
-	- 并且ri->last_ping_time不为0
-	
-	- ri->last_ping_time在ri->down_after_period/2时间内没有被更新过了
-	
-	- ri->last_pong_time在ri->down_after_period/2时间内没有被更新过了，即在ri->down_after_period/2没有任何reply。
+    - 如果距离上次试图connect的ri->cc_conn_time已经过了SENTINEL_MIN_LINK_RECONNECT_PERIOD,
+    SENTINEL_MIN_LINK_RECONNECT_PERIOD默认为15s，这个常量也仅仅用于此作用。
 
-所以可以看出来ri->down_after_period会严重影响cc重连的行为,ri->down_after_period的行为影响也仅仅是在sentinelCheckSubjectivelyDown里, 除了
+    - 并且ri->last_ping_time不为0
 
-- 对ping_period=min(ri->down_after_period, SENTINEL_PING_PERIOD)这样一个小影响之外。
+    - ri->last_ping_time在ri->down_after_period/2时间内没有被更新过了
 
-- 在sentinelSelectSlave里max_master_down_time += master->down_after_period * 10
+    - ri->last_pong_time在ri->down_after_period/2时间内没有被更新过了，
+    即在ri->down_after_period/2没有任何reply。
 
-检查pubsub link需要重连：
+可以看出来ri->last_ping_time在此处的用于检查cc link需要重连的作用。
+也可以看出来ri->down_after_period会严重影响cc重连的行为,
+ri->down_after_period的行为影响除了是在sentinelCheckSubjectivelyDown里, 还有,
 
-- 如果距离上次试图connect的ri->pc_conn_time已经过了SENTINEL_MIN_LINK_RECONNECT_PERIOD.
+    - 对ping_period=min(ri->down_after_period, SENTINEL_PING_PERIOD)这样一个小影响之外。
 
-- mstime() - ri->pc_last_activity) > (SENTINEL_PUBLISH_PERIOD*3) 关于ri->pc_last_activity，后续会详细解释.
+    - 在sentinelSelectSlave里max_master_down_time += master->down_after_period * 10.
+
+检查pubsub link需要重连,
+
+    - 如果距离上次试图connect的ri->pc_conn_time已经过了SENTINEL_MIN_LINK_RECONNECT_PERIOD.
+
+    - mstime() - ri->pc_last_activity) > (SENTINEL_PUBLISH_PERIOD*3) 关于ri->pc_last_activity，后续会详细解释.
 
 ri->down_after_period的含义如下：
 
-	- 初始化为SENTINEL_DEFAULT_DOWN_AFTER,即30s，并且会默认以master sentinelRedisInstance struct为准扩散到master->slaves, master->sentinels。
-	
-	```
-	/* src/sentinel.c */
-	896 sentinelRedisInstance *createSentinelRedisInstance(char *name, int flags, char *hostname, int port, int quorum, sentinelRedisInstance *master) {
-	956     ri->down_after_period = master ? master->down_after_period :
+    - 初始化为SENTINEL_DEFAULT_DOWN_AFTER,即30s，并且会默认以master sentinelRedisInstance struct为准扩散到master->slaves, master->sentinels。
+
+    ```
+    /* src/sentinel.c */
+    896 sentinelRedisInstance *createSentinelRedisInstance(char *name, int flags, char *hostname, int port, int quorum, sentinelRedisInstance *master) {
+    956     ri->down_after_period = master ? master->down_after_period :
     957                                 SENTINEL_DEFAULT_DOWN_AFTER;
     
     1315 /* This function sets the down_after_period field value in 'master' to all
-	1316  * the slaves and sentinel instances connected to this master. */
-	1317 void sentinelPropagateDownAfterPeriod(sentinelRedisInstance *master) {
-	1318     dictIterator *di;
-	1319     dictEntry *de;
-	1320     int j;
-	1321     dict *d[] = {master->slaves, master->sentinels, NULL};
-	1322
-	1323     for (j = 0; d[j]; j++) {
-	1324         di = dictGetIterator(d[j]);
-	1325         while((de = dictNext(di)) != NULL) {
-	1326             sentinelRedisInstance *ri = dictGetVal(de);
-	1327             ri->down_after_period = master->down_after_period;
-	1328         }
-	1329         dictReleaseIterator(di);
-	1330     }
-  	1331 }
-	```
-	- 在sentinelCheckSubjectivelyDown的作用马上后详细解释。
-	
+    1316  * the slaves and sentinel instances connected to this master. */
+    1317 void sentinelPropagateDownAfterPeriod(sentinelRedisInstance *master) {
+    1318     dictIterator *di;
+    1319     dictEntry *de;
+    1320     int j;
+    1321     dict *d[] = {master->slaves, master->sentinels, NULL};
+    1322
+    1323     for (j = 0; d[j]; j++) {
+    1324         di = dictGetIterator(d[j]);
+    1325         while((de = dictNext(di)) != NULL) {
+    1326             sentinelRedisInstance *ri = dictGetVal(de);
+    1327             ri->down_after_period = master->down_after_period;
+    1328         }
+    1329         dictReleaseIterator(di);
+    1330     }
+      1331 }
+    ```
+    - 在sentinelCheckSubjectivelyDown的作用马上后详细解释。
+    
 ```
 /* src/sentinel.c */
 3044 /* Is this instance down from our point of view? */
@@ -146,21 +153,21 @@ ri->down_after_period的含义如下：
 3103         }
 3104     }
 3105 }
-```	
+```    
 
 sentinelCheckSubjectivelyDown的后半部就是认定或者取消SRI_S_DOWN的状态。
 
 - +sdown 
-	
-	- mstime() - ri->last_ping_time > ri->down_after_period, 即如果ri->last_ping_time不为0，但是是pending状态即没有获得acceptable reply已经持续了超过ri->down_after_period.ri->last_ping_time在sentinelCheckSubjectivelyDown中的作用就在于此.
-		
-	- 如果该sentinelRedisInstance的ri->flags记录的role是master，而ri->role_reported报告是slave，并且报告已经超过(ri->down_after_period+SENTINEL_INFO_PERIOD*2)默认为50s的时间。此种情况下也会触发+sdown，为强制failover当前config中记录的该master创造条件。ri->down_after_period在在sentinelCheckSubjectivelyDown中的作用就在于此.
-		
-	如果以上条件满足，则会检查SRI_S_DOWN并标记flags为SRI_S_DOWN状态，并更新ri->s_down_since_time。并输出+sdown message。
-	
+    
+    - mstime() - ri->last_ping_time > ri->down_after_period, 即如果ri->last_ping_time不为0，但是是pending状态即没有获得acceptable reply已经持续了超过ri->down_after_period.ri->last_ping_time在sentinelCheckSubjectivelyDown中的作用就在于此.
+        
+    - 如果该sentinelRedisInstance的ri->flags记录的role是master，而ri->role_reported报告是slave，并且报告已经超过(ri->down_after_period+SENTINEL_INFO_PERIOD*2)默认为50s的时间。此种情况下也会触发+sdown，为强制failover当前config中记录的该master创造条件。ri->down_after_period在在sentinelCheckSubjectivelyDown中的作用就在于此.
+        
+    如果以上条件满足，则会检查SRI_S_DOWN并标记flags为SRI_S_DOWN状态，并更新ri->s_down_since_time。并输出+sdown message。
+    
 - -sdown
 
-	如果+sdown的条件不满足，则检查SRI_S_DOWN并撤销SRI_S_DOWN状态，并输出-sdown标记。
+    如果+sdown的条件不满足，则检查SRI_S_DOWN并撤销SRI_S_DOWN状态，并输出-sdown标记。
 
 SRI_S_DOWN标记只在以上两种情况下更新，也就是说这两个状态之间是来回切换的，不会有连续两次认定SRI_S_DOWN状态，也不会连续两次撤消SRI_S_DOWN状态。
 
@@ -213,17 +220,17 @@ SRI_S_DOWN标记只在以上两种情况下更新，也就是说这两个状态�
 可以看到认定为odown有两个条件，
 
 - 首先该master sentinelRedisInstance处于SRI_S_DOWN状态下，
-	
+    
 - 并且统计该master sentinelRedisInstance挂载下的sentinel sentinelRedisInstance，大部分sentinel sentinelRedisInstance处于SRI_MASTER_DOWN状态下。可以看到quorum的第一个作用就是在此，用于统计大多数，包括自己在内>=quorum。SRI_MASTER_DOWN这个flag的含义后续会详细介绍。关于quorum其他用途后续还会提到。
 
 结果如下,
 
 - +odown
 
-	如果以上条件满足，则会检查SRI_O_DOWN并标记flags为SRI_O_DOWN状态，并更新ri->o_down_since_time。并输出+odown message。
-	
+    如果以上条件满足，则会检查SRI_O_DOWN并标记flags为SRI_O_DOWN状态，并更新ri->o_down_since_time。并输出+odown message。
+    
 - -down
-	反之，则检查SRI_O_DOWN并撤销flags的SRI_O_DOWN状态，并输出-odown message。
+    反之，则检查SRI_O_DOWN并撤销flags的SRI_O_DOWN状态，并输出-odown message。
 
 SRI_O_DOWN标记只在以上两种情况下更新，也就是说这两个状态之间是来回切换的，不会有连续两次认定SRI_O_DOWN状态，也不会连续两次撤消SRI_O_DOWN状态。
 
@@ -659,26 +666,26 @@ SRI_FAILOVER_IN_PROGRESS是之前讲到过的sentinelStartFailover那个函数�
 
 - 该slave sentinelRedisInstance的info_refresh距今超过5倍SENTINEL_PING_PERIOD（master sentinelRedisInstance处于sdown状态）否则是3倍SENTINEL_INFO_PERIOD。这个区别是因为在sdown的情况下，info的频率就是1000ms和默认的SENTINEL_PING_PERIOD相同。这种情况下我们准许的delay要比正常情况小一些。
  
-	```
-	/* src/sentinel.c */
-	2344 void sentinelSendPeriodicCommands(sentinelRedisInstance *ri) {
-	2361     /* If this is a slave of a master in O_DOWN condition we start sending
-	2362      * it INFO every second, instead of the usual SENTINEL_INFO_PERIOD
-	2363      * period. In this state we want to closely monitor slaves in case they                                                                                                                            	2364      * are turned into masters by another Sentinel, or by the sysadmin. */
-	2365     if ((ri->flags & SRI_SLAVE) &&
-	2366         (ri->master->flags & (SRI_O_DOWN|SRI_FAILOVER_IN_PROGRESS))) {
-	2367         info_period = 1000;
-	2368     } else {
-	2369         info_period = SENTINEL_INFO_PERIOD;
-	2370     }
-	```
+    ```
+    /* src/sentinel.c */
+    2344 void sentinelSendPeriodicCommands(sentinelRedisInstance *ri) {
+    2361     /* If this is a slave of a master in O_DOWN condition we start sending
+    2362      * it INFO every second, instead of the usual SENTINEL_INFO_PERIOD
+    2363      * period. In this state we want to closely monitor slaves in case they                                                                                                                                2364      * are turned into masters by another Sentinel, or by the sysadmin. */
+    2365     if ((ri->flags & SRI_SLAVE) &&
+    2366         (ri->master->flags & (SRI_O_DOWN|SRI_FAILOVER_IN_PROGRESS))) {
+    2367         info_period = 1000;
+    2368     } else {
+    2369         info_period = SENTINEL_INFO_PERIOD;
+    2370     }
+    ```
 - 该slave反馈的master_link_down_time大于max_master_down_time。
 
-	关于max_master_down_time这个值，如果failover的master sentinelRedisInstance处于SRI_S_DOWN，则给max_master_down_time加上mstime() - master->s_down_since_time，就是master sentinelRedisInstance记录的该master instance进入sdown状态已经持续了多长时间。再加上10倍master->down_after_period(默认为30s)，默认情况下，就是300秒，5分钟。max_master_down_time加上10倍master->down_after_period就是给redis instance判断master_link_down_time等信息预留了一部分时间，如果超过这个时间，则认为该slave的master_link_down_time太久。涉及到的master->s_down_since_time和slave->master_link_down_time这里解释一下，两者其实没有直接关联。
-	
-	- master->s_down_since_time是由于该master sentinelRedisInstance本身收集的一些状态触发的。之前已经介绍过了。
-	
-	- slave->master_link_down_time则是有slave sentinelRedisInstance记录的远程instance的info回复信息中的信息。
+    关于max_master_down_time这个值，如果failover的master sentinelRedisInstance处于SRI_S_DOWN，则给max_master_down_time加上mstime() - master->s_down_since_time，就是master sentinelRedisInstance记录的该master instance进入sdown状态已经持续了多长时间。再加上10倍master->down_after_period(默认为30s)，默认情况下，就是300秒，5分钟。max_master_down_time加上10倍master->down_after_period就是给redis instance判断master_link_down_time等信息预留了一部分时间，如果超过这个时间，则认为该slave的master_link_down_time太久。涉及到的master->s_down_since_time和slave->master_link_down_time这里解释一下，两者其实没有直接关联。
+    
+    - master->s_down_since_time是由于该master sentinelRedisInstance本身收集的一些状态触发的。之前已经介绍过了。
+    
+    - slave->master_link_down_time则是有slave sentinelRedisInstance记录的远程instance的info回复信息中的信息。
 
 经过以上条件筛选剩下来的slave丢入qsort按compareSlavesForPromotion里定义的优先级进行快排，取排序后的第一个。
 
@@ -833,10 +840,10 @@ send SLAVEOF是一个transaction，暂时不谈redis的transaction机制，暂�
 
 - CLIENT KILL TYPE normal是指从redis instance端杀掉所有normal type的连接，除当前发送命令的connection外。 官方文档对此的解释是，
 
-	> CLIENT KILL and Redis Sentinel Recent versions of Redis Sentinel (Redis 2.8.12 or greater) use CLIENT KILL in order to kill clients when an instance is reconfigured, in order to force clients to perform the handshake with one Sentinel again and update its configuration
-	
-	> CLIENT KILL TYPE type, where type is one of normal, slave, pubsub. This closes the connections of all the clients in the specified class. Note that clients blocked into the MONITOR command are considered to belong to the normal class.
-	
+    > CLIENT KILL and Redis Sentinel Recent versions of Redis Sentinel (Redis 2.8.12 or greater) use CLIENT KILL in order to kill clients when an instance is reconfigured, in order to force clients to perform the handshake with one Sentinel again and update its configuration
+    
+    > CLIENT KILL TYPE type, where type is one of normal, slave, pubsub. This closes the connections of all the clients in the specified class. Note that clients blocked into the MONITOR command are considered to belong to the normal class.
+    
 上面引用中提到的client type跟sentinelSetClientName时指定的name没有直接关系,虽然name的格式是sentinel-<first_8_chars_of_runid>-<connection_type> % ("cmd" or "pubsub")。sentinelSetClientName是为了方便使用者的角度来grep的。
 
 ```

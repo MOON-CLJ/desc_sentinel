@@ -141,7 +141,7 @@ sentinelHandleRedisInstance里的每个函数都很有意思，后续章节会�
     1629 }
     ```
 
-    - cc重连机制, 也即cc的sentinelKillLink
+    - cc重连机制, 也即sentinelReconnectInstance中cc的部分
 
         ```
         /* src/sentinel.c */
