@@ -1463,7 +1463,7 @@ old master的配置切换到switch to的new master配置。
 
 可以看到failover_state_change_time这个属性在任何failover_state变更的地方都会随之变更，
 除了变更为SENTINEL_FAILOVER_STATE_NONE会将failover_state_change_time置为0之外，都是置为mstime()，
-这些变更是干嘛的呢，马上会提到。
+这些变更是什么用途，后续会提到。
 
 首先提一下，failover的流程终止的情况，有两种，
 
