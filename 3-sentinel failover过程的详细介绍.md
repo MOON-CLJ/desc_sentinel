@@ -63,7 +63,7 @@ sentinelRedisInstance上，而sentinelCheckObjectivelyDown仅作用于master rol
 
 sentinelCheckSubjectivelyDown的前半部分主要是kill cc或者pc link以供重连的逻辑。
 
-检查cc link需要重连,
+- 检查cc link需要重连,
 
     - 如果距离上次试图connect的ri->cc_conn_time已经过了SENTINEL_MIN_LINK_RECONNECT_PERIOD,
     SENTINEL_MIN_LINK_RECONNECT_PERIOD默认为15s，这个常量也仅仅用于此作用。
@@ -75,50 +75,56 @@ sentinelCheckSubjectivelyDown的前半部分主要是kill cc或者pc link以供�
     - ri->last_pong_time在ri->down_after_period/2时间内没有被更新过了，
     即在ri->down_after_period/2没有任何reply。
 
-可以看出来ri->last_ping_time在此处的用于检查cc link需要重连的作用。
-也可以看出来ri->down_after_period会严重影响cc重连的行为,
-ri->down_after_period的行为影响除了是在sentinelCheckSubjectivelyDown里, 还有,
+    可以看出来ri->last_ping_time在此处的用于检查cc link需要重连的作用。
+    这是ri->last_ping_time在sentinelCheckSubjectivelyDown的前半部分的作用，
+    在后半部分的作用后续还会提到。
+    也可以看出来ri->down_after_period会严重影响cc重连的行为,
+    ri->down_after_period的行为影响除了是在sentinelCheckSubjectivelyDown里
+    (后续解释的内容,此处先带过), 还有以下情况,
 
     - 对ping_period=min(ri->down_after_period, SENTINEL_PING_PERIOD)这样一个小影响之外。
 
     - 在sentinelSelectSlave里max_master_down_time += master->down_after_period * 10.
 
-检查pubsub link需要重连,
+- 检查pubsub link需要重连,
 
     - 如果距离上次试图connect的ri->pc_conn_time已经过了SENTINEL_MIN_LINK_RECONNECT_PERIOD.
 
-    - mstime() - ri->pc_last_activity) > (SENTINEL_PUBLISH_PERIOD*3) 关于ri->pc_last_activity，后续会详细解释.
+    - (mstime() - ri->pc_last_activity) > (SENTINEL_PUBLISH_PERIOD*3), 关于ri->pc_last_activity，
+    后续会详细解释.
 
-ri->down_after_period的含义如下：
+ri->down_after_period的初始化如下，
+初始化为SENTINEL_DEFAULT_DOWN_AFTER,即30s，并且会默认以master sentinelRedisInstance struct为准
+通过sentinelPropagateDownAfterPeriod扩散到master->slaves, master->sentinels。
 
-    - 初始化为SENTINEL_DEFAULT_DOWN_AFTER,即30s，并且会默认以master sentinelRedisInstance struct为准扩散到master->slaves, master->sentinels。
+```
+/* src/sentinel.c */
+896 sentinelRedisInstance *createSentinelRedisInstance(char *name, int flags, char *hostname, int port, int quorum, sentinelRedisInstance *master) {
+956     ri->down_after_period = master ? master->down_after_period :
+957                                 SENTINEL_DEFAULT_DOWN_AFTER;
 
-    ```
-    /* src/sentinel.c */
-    896 sentinelRedisInstance *createSentinelRedisInstance(char *name, int flags, char *hostname, int port, int quorum, sentinelRedisInstance *master) {
-    956     ri->down_after_period = master ? master->down_after_period :
-    957                                 SENTINEL_DEFAULT_DOWN_AFTER;
-    
-    1315 /* This function sets the down_after_period field value in 'master' to all
-    1316  * the slaves and sentinel instances connected to this master. */
-    1317 void sentinelPropagateDownAfterPeriod(sentinelRedisInstance *master) {
-    1318     dictIterator *di;
-    1319     dictEntry *de;
-    1320     int j;
-    1321     dict *d[] = {master->slaves, master->sentinels, NULL};
-    1322
-    1323     for (j = 0; d[j]; j++) {
-    1324         di = dictGetIterator(d[j]);
-    1325         while((de = dictNext(di)) != NULL) {
-    1326             sentinelRedisInstance *ri = dictGetVal(de);
-    1327             ri->down_after_period = master->down_after_period;
-    1328         }
-    1329         dictReleaseIterator(di);
-    1330     }
-      1331 }
-    ```
-    - 在sentinelCheckSubjectivelyDown的作用马上后详细解释。
-    
+1315 /* This function sets the down_after_period field value in 'master' to all
+1316  * the slaves and sentinel instances connected to this master. */
+1317 void sentinelPropagateDownAfterPeriod(sentinelRedisInstance *master) {
+1318     dictIterator *di;
+1319     dictEntry *de;
+1320     int j;
+1321     dict *d[] = {master->slaves, master->sentinels, NULL};
+1322
+1323     for (j = 0; d[j]; j++) {
+1324         di = dictGetIterator(d[j]);
+1325         while((de = dictNext(di)) != NULL) {
+1326             sentinelRedisInstance *ri = dictGetVal(de);
+1327             ri->down_after_period = master->down_after_period;
+1328         }
+1329         dictReleaseIterator(di);
+1330     }
+1331 }
+```
+
+ri->down_after_period在sentinelCheckSubjectivelyDown的作用后续马上详细解释。
+先继续看sentinelCheckSubjectivelyDown的剩余部分，
+
 ```
 /* src/sentinel.c */
 3044 /* Is this instance down from our point of view? */
@@ -153,25 +159,33 @@ ri->down_after_period的含义如下：
 3103         }
 3104     }
 3105 }
-```    
+```
 
 sentinelCheckSubjectivelyDown的后半部就是认定或者取消SRI_S_DOWN的状态。
 
-- +sdown 
-    
-    - mstime() - ri->last_ping_time > ri->down_after_period, 即如果ri->last_ping_time不为0，但是是pending状态即没有获得acceptable reply已经持续了超过ri->down_after_period.ri->last_ping_time在sentinelCheckSubjectivelyDown中的作用就在于此.
-        
-    - 如果该sentinelRedisInstance的ri->flags记录的role是master，而ri->role_reported报告是slave，并且报告已经超过(ri->down_after_period+SENTINEL_INFO_PERIOD*2)默认为50s的时间。此种情况下也会触发+sdown，为强制failover当前config中记录的该master创造条件。ri->down_after_period在在sentinelCheckSubjectivelyDown中的作用就在于此.
-        
+- +sdown
+
+    - mstime() - ri->last_ping_time > ri->down_after_period, 即如果ri->last_ping_time不为0，
+    但是是pending状态即没有获得acceptable reply已经持续了超过ri->down_after_period.
+    ri->last_ping_time在sentinelCheckSubjectivelyDown中的作用就在于此.
+
+    - 如果该sentinelRedisInstance的ri->flags记录的role是master，而ri->role_reported报告是slave，
+    并且报告已经超过(ri->down_after_period+SENTINEL_INFO_PERIOD*2)默认为50s的时间。
+    **这是我们遇到的第三种master slave role信息不吻合的情况。**
+    此种情况下也会触发+sdown，进而+odown,进而sentinel会采取行动，进而通过在当前config中的
+    该master sentinelRedisInstance上进行failover, 以期用failover的方式来移交出此instance当前master的role。
+    ri->down_after_period在在sentinelCheckSubjectivelyDown后半部分中的作用就在于此.
+
     如果以上条件满足，则会检查SRI_S_DOWN并标记flags为SRI_S_DOWN状态，并更新ri->s_down_since_time。并输出+sdown message。
-    
+
 - -sdown
 
-    如果+sdown的条件不满足，则检查SRI_S_DOWN并撤销SRI_S_DOWN状态，并输出-sdown标记。
+    - 如果+sdown的条件不满足，则检查SRI_S_DOWN并撤销SRI_S_DOWN状态，并输出-sdown标记。
 
-SRI_S_DOWN标记只在以上两种情况下更新，也就是说这两个状态之间是来回切换的，不会有连续两次认定SRI_S_DOWN状态，也不会连续两次撤消SRI_S_DOWN状态。
+SRI_S_DOWN标记只在以上两种情况下更新，也就是说这两个状态之间是来回切换的，
+不会有连续两次认定SRI_S_DOWN状态，也不会连续两次撤消SRI_S_DOWN状态。
 
-- sentinelCheckObjectivelyDown
+我们继续看一下sentinelCheckObjectivelyDown,
 
 ```
 /* src/sentinel.c */
@@ -220,29 +234,41 @@ SRI_S_DOWN标记只在以上两种情况下更新，也就是说这两个状态�
 可以看到认定为odown有两个条件，
 
 - 首先该master sentinelRedisInstance处于SRI_S_DOWN状态下，
-    
-- 并且统计该master sentinelRedisInstance挂载下的sentinel sentinelRedisInstance，大部分sentinel sentinelRedisInstance处于SRI_MASTER_DOWN状态下。可以看到quorum的第一个作用就是在此，用于统计大多数，包括自己在内>=quorum。SRI_MASTER_DOWN这个flag的含义后续会详细介绍。关于quorum其他用途后续还会提到。
+
+- 并且统计该master sentinelRedisInstance挂载下的sentinel sentinelRedisInstance，
+大部分sentinel sentinelRedisInstance处于SRI_MASTER_DOWN状态下。可以看到quorum的第一个作用
+就是在此，用于统计大多数，包括自己在内>=quorum。SRI_MASTER_DOWN这个flag的含义后续
+会详细介绍。关于quorum其他用途后续还会提到。
 
 结果如下,
 
 - +odown
 
     如果以上条件满足，则会检查SRI_O_DOWN并标记flags为SRI_O_DOWN状态，并更新ri->o_down_since_time。并输出+odown message。
-    
-- -down
+
+- -odown
+
     反之，则检查SRI_O_DOWN并撤销flags的SRI_O_DOWN状态，并输出-odown message。
 
-SRI_O_DOWN标记只在以上两种情况下更新，也就是说这两个状态之间是来回切换的，不会有连续两次认定SRI_O_DOWN状态，也不会连续两次撤消SRI_O_DOWN状态。
+SRI_O_DOWN标记只在以上两种情况下更新，也就是说这两个状态之间是来回切换的，
+不会有连续两次认定SRI_O_DOWN状态，也不会连续两次撤消SRI_O_DOWN状态。
 
-但是值得注意的是，+odown状态对+sdown状态有依赖关系，并且显而易见，满足的条件上面也提过。但是-odown对-sdown的依赖需要小心对待。分两种情况
+但是值得注意的是，+odown状态对+sdown状态有依赖关系，并且显而易见，需要依赖满足的条件上面也提过。
+但是-odown对-sdown的依赖需要小心对待。分两种情况,
 
 - 如果该master sentinelRedisInstance的SRI_S_DOWN状态撤消了，则SRI_O_DOWN一定会撤销，不通过任何统计大多数的流程。
 
-- 如果该master sentinelRedisInstance的SRI_S_DOWN状态还在，但是从该master sentinelRedisInstance挂载下的sentinel sentinelRedisInstance中统计SRI_MASTER_DOWN状态没有达到大多数同意时，SRI_O_DOWN还是会撤销。
+- 如果该master sentinelRedisInstance的SRI_S_DOWN状态还在，但是从该master sentinelRedisInstance挂载下的
+sentinel sentinelRedisInstance中统计SRI_MASTER_DOWN状态没有达到大多数同意时，SRI_O_DOWN还是会直接撤销,不会要求
+SRI_S_DOWN在它之前撤销。
 
-所以不能假设+sdown,+odown,-sdown,-odown一定是顺序发生的，提这个事情主要是之前假设过这个逻辑，但事实证明假设不成立。当时的日志如下。
+所以不能假设+sdown,+odown,-sdown,-odown一定是顺序发生的，提这个点主要是之前假设过这个逻辑，
+但事实证明假设不成立。当时的日志如下。
 
-> 我又看了一下，确实可能出现+odown之后马上就来一个-odown，中间没有-sdown的情况，+odown之后，此sentinel会立即向其他sentinels发消息确认，14:24:28的时候，独自认为+odown的那个sentinel向其他sentinel发消息确认是不是 +odown了，别人告诉他“没有啊”，那他说，“哦，我搞错了，不好意思”，然后马上就直接-odown了。但是14:24:30此sentinel又从自身的状态统计到了+odown，这次他问其他sentinels，别人都同意.
+> 我又看了一下，确实可能出现+odown之后马上就来一个-odown，中间没有-sdown的情况，
+> +odown之后，此sentinel会立即向其他sentinels发消息确认，14:24:28的时候，独自认为+odown的那个sentinel向
+> 其他sentinel发消息确认是不是+odown了，别人告诉他“没有啊”，那他说，“哦，我搞错了，不好意思”，然后马上就直接-odown了。
+> 但是14:24:30此sentinel又从自身的状态统计到了+odown，这次他问其他sentinels，别人都同意.
 
 ### **start failover & try failover**
 --------------------------------------
