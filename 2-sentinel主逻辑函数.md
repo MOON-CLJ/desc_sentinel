@@ -597,7 +597,7 @@ sentinelSendHello后续章节会详细解释，这里解释一下sentinelInfoRep
         ```
 
         **在当前的ri是role为slave的sentinelRedisInstance，而指向的redis instance的info信息中确报告自己为master.
-        这是我们遇到的第一种role信息不吻合的情况。**
+        这是我们遇到的第一种master slave role信息不吻合的情况。**
         这样的情况下，有以下几部分逻辑，
 
         如果此时从我们记录的状态来看，该slave sentinelRedisInstance确实是被标记为SRI_PROMOTED，
@@ -742,18 +742,25 @@ sentinelSendHello后续章节会详细解释，这里解释一下sentinelInfoRep
     2007         }
     2008     }
     ```
-    这段是处理slave replicating to a different master的情况,即如果保存当前slave sentinelRedisInstance的flags信息和从info获取的role信息都表示所指向的instance是slave，但是从info里获取的master信息不吻合，并且满足以下条件，（mstime_t wait_time = ri->master->failover_timeout;）
-    
+
+    **这是我们遇到的第二种master slave role信息不吻合的情况。**
+    这段是处理slave replicating to a different master的情况,即如果
+    当前slave sentinelRedisInstance的flags role信息和从remote redis instance info获取的
+    role信息都表示remote redis instance是slave, 这点没有疑问，但是当前slave sentinelRedisInstance的
+    master信息与从该slave instance info里获取的master信息不吻合，并且满足以下条件，
+    (以下wait_time的定义是mstime_t wait_time = ri->master->failover_timeout;)
+
     - sentinelMasterLooksSane(ri->master) maser看起来okay
-    
+
     - sentinelRedisInstanceNoDownFor(ri,wait_time) 这个slave在当前时间往前failover_timeout一段时间之内没down掉过。
-    
-    - mstime() - ri->slave_conf_change_time > wait_time 在wait_time这段时间之内slave的config没有变更过。(具体变更情况，前面已经列举过了)。
-    
-    就会强制sentinelSendSlaveOf这个slave instance SlaveOf 我们config中的master instance。
-    
+
+    - mstime() - ri->slave_conf_change_time > wait_time 在wait_time这段时间之内
+    slave的config没有变更过。(具体变更情况，前面已经列举过了.)
+
+    就会强制sentinelSendSlaveOf这个slave instance SlaveOf我们当前config中的master instance。
+
     sentinelRefreshInstanceInfo最后一部分，
-    
+
     ```
     /* src/sentinel.c */
     1789 /* Process the INFO output from masters. */
@@ -785,24 +792,31 @@ sentinelSendHello后续章节会详细解释，这里解释一下sentinelInfoRep
     2034         }
     2035     }
     ```
-    这是failover过程中SRI_RECONF_xx这个系列相关的逻辑,这个逻辑是发生在role为slave的sentinelRedisInstance上的，这系列flag的定义如下：
-    
+
+    这是failover过程中SRI_RECONF_xx这个系列相关的逻辑,这个逻辑是发生在role为
+    slave的sentinelRedisInstance上的，这系列flag的定义如下：
+
     ```
     /* src/sentinel.c */
     65 #define SRI_RECONF_SENT (1<<9)     /* SLAVEOF <newmaster> sent. */
-      66 #define SRI_RECONF_INPROG (1<<10)   /* Slave synchronization in progress. */
-      67 #define SRI_RECONF_DONE (1<<11)     /* Slave synchronized with new master. */
+    66 #define SRI_RECONF_INPROG (1<<10)   /* Slave synchronization in progress. */
+    67 #define SRI_RECONF_DONE (1<<11)     /* Slave synchronized with new master. */
     ```
-    如果该instance的info中报告的该instance的role是slave，并且slave sentinelRedisInstance的flags记录表示该instance正处于前两个状态，即SRI_RECONF_SENT，SRI_RECONF_INPROG，则需要检查更多的信息来判断这系列状态是否要往后推进，包括以下两个阶段。
-    
+
+    如果该instance的info中报告的该instance的role是slave，并且slave sentinelRedisInstance的flags表示
+    该instance正处于前两个状态，即SRI_RECONF_SENT，SRI_RECONF_INPROG，则需要检查更多的信息来判断
+    这系列状态是否要往后推进，包括以下两个阶段。
+
     - SRI_RECONF_SENT -> SRI_RECONF_INPROG
-    如果该slave sentinelRedisInstance处于SRI_RECONF_SENT状态，并且该slave sentinelRedisInstance指向的slave instance的info中报告的ri->slave_master_host和ri->slave_master_port和该slave sentinelRedisInstance记录的ri->master->promoted_slave的host和port相吻合，则说明在sendslaveof cmd发出去之后，instance已经响应slave of完成，则标记flags为SRI_RECONF_INPROG进入到下一个阶段。
-    
+
+        如果该slave sentinelRedisInstance处于SRI_RECONF_SENT状态，并且该slave sentinelRedisInstance指向的slave instance的info中报告的ri->slave_master_host和ri->slave_master_port和该slave sentinelRedisInstance记录的ri->master->promoted_slave的host和port相吻合，则说明在sendslaveof cmd发出去之后，instance已经响应slave of完成，则标记flags为SRI_RECONF_INPROG进入到下一个阶段。
+
     - SRI_RECONF_INPROG -> SRI_RECONF_DONE
-    如果该slave sentinelRedisInstance处于SRI_RECONF_SENT_INPROG状态，并且相应的slave instance的info中报告的ri->slave_master_link_status已经处于up状态，则认为整个reconf完成。关于master_link_status具体的含义后续会详细解释。
-    
+
+        如果该slave sentinelRedisInstance处于SRI_RECONF_SENT_INPROG状态，并且相应的slave instance的info中报告的ri->slave_master_link_status已经处于up状态，则认为整个reconf完成。关于master_link_status具体的含义后续会详细解释。
+
     另外SRI_RECONF_xx系列还有以下几个用途，
-    
+
     - 主导failover过程的sentinel判断该次failover是否结束时，会判断处于该次failover的那个master sentinelRedisInstance挂载下的所有slave sentinelRedisInstance是否处于SRI_RECONF_DONE的状态，或者是SRI_PROMOTED状态，SRI_PROMOTED是因为该slave sentinelRedisInstance相应的slave instance就是这次failover过程中被选出来当做新的master的instance，不需要经历SRI_RECONF_xx系列。
     
     ```
