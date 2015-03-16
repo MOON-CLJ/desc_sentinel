@@ -339,7 +339,8 @@ info_period是1000ms，以更快得到该slave可能被提升为master而产生�
 2344 void sentinelSendPeriodicCommands(sentinelRedisInstance *ri) {
 2345     mstime_t now = mstime();
 2378     if ((ri->flags & SRI_SENTINEL) == 0 &&
-2379         (ri->info_refresh == 0 ||                                                                                                                                                                        2380         (now - ri->info_refresh) > info_period))
+2379         (ri->info_refresh == 0 ||
+2380         (now - ri->info_refresh) > info_period))
 2381     {
 2382         /* Send INFO to masters and slaves, not sentinels. */
 2383         retval = redisAsyncCommand(ri->cc,
