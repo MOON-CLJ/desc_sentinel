@@ -844,7 +844,7 @@ sentinelSendHello后续章节会详细解释，这里解释一下sentinelInfoRep
         3750     dictReleaseIterator(di);
         ```
 
-    - SRI_RECONF_xx系列 在sentinelFailoverReconfNextSlave的详细作用后续会详细说明。
+    SRI_RECONF_xx系列 在sentinelFailoverReconfNextSlave的详细作用后续会详细说明。
 
     上面那么大的篇幅终于把info信息的处理这部分内容讲完了，除了sentinelInfoReplyCallback这个
     定期收集info信息的逻辑之外，还有sentinelSendPing也是定期执行的。
