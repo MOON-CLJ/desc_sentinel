@@ -602,7 +602,7 @@ sentinelVoteLeader的细节后续会详细解释。现在可以稍微注意一�
     回复信息的汇总不在本阶段，而是在failover正式流程的第一个阶段，即我们即将介绍的下一个阶段。
     **值得注意的是，之前也提到过，sentinelAskMasterStateToOtherSentinels是一个常态化的作用于master role的
     sentinelRedisInstance的命令，不是仅限于failover in progress。
-    在failover in progress的区别是ask is-master-down-by-addr最后一个参数是该sentinel的runid。**
+    在failover in progress的区别是ask is-master-down-by-addr最后一个参数是该sentinel instance的runid。**
 
     有关SRI_FAILOVER_IN_PROGRESS以及SENTINEL_FAILOVER_STATE_NONE的变更如下,
 
@@ -1131,116 +1131,135 @@ sentinelVoteLeader的细节后续会详细解释。现在可以稍微注意一�
 
 - **SENTINEL_FAILOVER_STATE_RECONF_SLAVES -> SENTINEL_FAILOVER_STATE_UPDATE_CONFIG**
 
-```
-/* src/sentinel.c */
-3795 /* Send SLAVE OF <new master address> to all the remaining slaves that
-3796  * still don't appear to have the configuration updated. */
-3797 void sentinelFailoverReconfNextSlave(sentinelRedisInstance *master) {
-3798     dictIterator *di;
-3799     dictEntry *de;
-3800     int in_progress = 0;
-3801
-3802     di = dictGetIterator(master->slaves);
-3803     while((de = dictNext(di)) != NULL) {
-3804         sentinelRedisInstance *slave = dictGetVal(de);
-3805
-3806         if (slave->flags & (SRI_RECONF_SENT|SRI_RECONF_INPROG))
-3807             in_progress++;
-3808     }
-3809     dictReleaseIterator(di);
-3810
-3811     di = dictGetIterator(master->slaves);
-3812     while(in_progress < master->parallel_syncs &&
-3813           (de = dictNext(di)) != NULL)
-3814     {
-3815         sentinelRedisInstance *slave = dictGetVal(de);
-3816         int retval;
-3817
-3818         /* Skip the promoted slave, and already configured slaves. */
-3819         if (slave->flags & (SRI_PROMOTED|SRI_RECONF_DONE)) continue;
-3833
-3834         /* Nothing to do for instances that are disconnected or already
-3835          * in RECONF_SENT state. */
-3836         if (slave->flags & (SRI_DISCONNECTED|SRI_RECONF_SENT|SRI_RECONF_INPROG))
-3837             continue;
-```
+    ```
+    /* src/sentinel.c */
+    3795 /* Send SLAVE OF <new master address> to all the remaining slaves that
+    3796  * still don't appear to have the configuration updated. */
+    3797 void sentinelFailoverReconfNextSlave(sentinelRedisInstance *master) {
+    3798     dictIterator *di;
+    3799     dictEntry *de;
+    3800     int in_progress = 0;
+    3801
+    3802     di = dictGetIterator(master->slaves);
+    3803     while((de = dictNext(di)) != NULL) {
+    3804         sentinelRedisInstance *slave = dictGetVal(de);
+    3805
+    3806         if (slave->flags & (SRI_RECONF_SENT|SRI_RECONF_INPROG))
+    3807             in_progress++;
+    3808     }
+    3809     dictReleaseIterator(di);
+    3810
+    3811     di = dictGetIterator(master->slaves);
+    3812     while(in_progress < master->parallel_syncs &&
+    3813           (de = dictNext(di)) != NULL)
+    3814     {
+    3815         sentinelRedisInstance *slave = dictGetVal(de);
+    3816         int retval;
+    3817
+    3818         /* Skip the promoted slave, and already configured slaves. */
+    3819         if (slave->flags & (SRI_PROMOTED|SRI_RECONF_DONE)) continue;
+    3833
+    3834         /* Nothing to do for instances that are disconnected or already
+    3835          * in RECONF_SENT state. */
+    3836         if (slave->flags & (SRI_DISCONNECTED|SRI_RECONF_SENT|SRI_RECONF_INPROG))
+    3837             continue;
+    ```
 
-这个函数是在promoted_slave提升为master后，将向failover的old master sentinelRedisInstance挂载下的所有slave sentinelRedisInstance(除promoted_slave new master之外)所指向的redis slave instance发送sentinelSendSlaveOf到new master，此时还记录在old master->promoted_slave中。
+    这个函数是在promoted_slave提升为master后，将向failover的old master sentinelRedisInstance挂载下的
+    所有slave sentinelRedisInstance(除promoted_slave new master之外)所指向的redis slave instance发送
+    sentinelSendSlaveOf new master的cmd，此时还记录在old master->promoted_slave中。
 
-以下几种情况会跳过或者暂时跳过，
+    以下几种情况会跳过或者暂时跳过，
 
-- 此处会统计在SRI_RECONF_SENT|SRI_RECONF_INPROG状态的slave sentinelRedisInstance的个数。如果达到上限master->parallel_syncs，则慢慢来，主要是控制同时与new master sync的数量。master->parallel_syncs的作用就在此，并且之前也提过。
+    - 此处会统计在SRI_RECONF_SENT|SRI_RECONF_INPROG状态的slave sentinelRedisInstance的个数。
+    如果达到上限master->parallel_syncs，则hold on,暂时不再发送send slaveof cmd来增加同步的压力，
+    主要是控制同时与new master sync的数量。master->parallel_syncs的作用就在此，并且之前也提过。
 
-- 如果该slave sentinelRedisInstance是SRI_PROMOTED状态，即promoted_slave，the new master。此处就是SRI_PROMOTED的又一作用。
+    - 如果该slave sentinelRedisInstance是SRI_PROMOTED状态，
+    即promoted_slave，the new master。此处就是SRI_PROMOTED的又一作用。
 
-- 如果该slave sentinelRedisInstance已经是SRI_RECONF_DONE状态，则表示不仅已经sentinelSendSlaveOf过了，并且按照cmd的意思slave instance和new master instance之间已经config好了, master_link已经建立好了，master_link_status已经是ok的了。之前讲SRI_RECONF_xx系列时也提到过，master_link_status还是后续再讲。
+    - 如果该slave sentinelRedisInstance已经是SRI_RECONF_DONE状态，则表示不仅
+    已经sentinelSendSlaveOf过了，并且按照cmd的意思slave instance和new master instance之间
+    已经config好了, master_link已经建立好了，master_link_status已经是ok的了。
+    之前讲SRI_RECONF_xx系列时也提到过，master_link_status还是后续再讲。
 
-- 如果该slave sentinelRedisInstance处于SRI_DISCONNECTED|SRI_RECONF_SENT|SRI_RECONF_INPROG这三种状态，都是显而易见的策略。
+    - 如果该slave sentinelRedisInstance处于SRI_DISCONNECTED|SRI_RECONF_SENT|SRI_RECONF_INPROG这三种状态，
+    则表示已经sentinelSendSlaveOf过了.
 
-sentinelFailoverReconfNextSlave剩余部分，
+    sentinelFailoverReconfNextSlave剩余部分，
 
-```
-/* src/sentinel.c */
-3797 void sentinelFailoverReconfNextSlave(sentinelRedisInstance *master) {
-3839         /* Send SLAVEOF <new master>. */
-3840         retval = sentinelSendSlaveOf(slave,
-3841                 master->promoted_slave->addr->ip,
-3842                 master->promoted_slave->addr->port);
-3843         if (retval == REDIS_OK) {
-3844             slave->flags |= SRI_RECONF_SENT;
-3845             slave->slave_reconf_sent_time = mstime();
-3846             sentinelEvent(REDIS_NOTICE,"+slave-reconf-sent",slave,"%@");
-3847             in_progress++;
-3848         }
-3849     }
-3850     dictReleaseIterator(di);
-3851
-3852     /* Check if all the slaves are reconfigured and handle timeout. */
-3853     sentinelFailoverDetectEnd(master);
-```
-就是执行sentinelSendSlaveOf，并且将slave sentinelRedisInstance置为SRI_RECONF_SENT SRI_RECONF_xx系列的初始状态,并且初始化了slave sentinelRedisInstance的slave_reconf_sent_time属性为当前时间，主要是用于判断超时的时候会用到，后续会解释，至此也就是SRI_RECONF_xx系列的最后没有提到过的在sentinelFailoverReconfNextSlave中的作用。
+    ```
+    /* src/sentinel.c */
+    3797 void sentinelFailoverReconfNextSlave(sentinelRedisInstance *master) {
+    3839         /* Send SLAVEOF <new master>. */
+    3840         retval = sentinelSendSlaveOf(slave,
+    3841                 master->promoted_slave->addr->ip,
+    3842                 master->promoted_slave->addr->port);
+    3843         if (retval == REDIS_OK) {
+    3844             slave->flags |= SRI_RECONF_SENT;
+    3845             slave->slave_reconf_sent_time = mstime();
+    3846             sentinelEvent(REDIS_NOTICE,"+slave-reconf-sent",slave,"%@");
+    3847             in_progress++;
+    3848         }
+    3849     }
+    3850     dictReleaseIterator(di);
+    3851
+    3852     /* Check if all the slaves are reconfigured and handle timeout. */
+    3853     sentinelFailoverDetectEnd(master);
+    ```
 
-最后讲讲sentinelFailoverDetectEnd这个函数，最重要的failover state提升的逻辑还在里面呢。
+    就是执行sentinelSendSlaveOf，并且将slave sentinelRedisInstance置为SRI_RECONF_SENT
+    即SRI_RECONF_xx系列的初始状态,并且初始化了slave sentinelRedisInstance的
+    slave_reconf_sent_time属性为当前时间，主要是用于判断超时的时候会用到，后续会解释，
+    至此也就是SRI_RECONF_xx系列的最后没有提到过的在sentinelFailoverReconfNextSlave中的作用。
 
-```
-/* src/sentinel.c */
-3729 void sentinelFailoverDetectEnd(sentinelRedisInstance *master) {
-3730     int not_reconfigured = 0, timeout = 0;
-3731     dictIterator *di;
-3732     dictEntry *de;
-3733     mstime_t elapsed = mstime() - master->failover_state_change_time;
-3734
-3735     /* We can't consider failover finished if the promoted slave is
-3736      * not reachable. */
-3737     if (master->promoted_slave == NULL ||
-3738         master->promoted_slave->flags & SRI_S_DOWN) return;
-3739
-3740     /* The failover terminates once all the reachable slaves are properly
-3741      * configured. */
-3742     di = dictGetIterator(master->slaves);
-3743     while((de = dictNext(di)) != NULL) {
-3744         sentinelRedisInstance *slave = dictGetVal(de);
-3745
-3746         if (slave->flags & (SRI_PROMOTED|SRI_RECONF_DONE)) continue;
-3747         if (slave->flags & SRI_S_DOWN) continue;
-3748         not_reconfigured++;
-3749     }
-3750     dictReleaseIterator(di);
-3759
-3760     if (not_reconfigured == 0) {
-3761         sentinelEvent(REDIS_WARNING,"+failover-end",master,"%@ %llu",
-3762             (unsigned long long) master->failover_epoch);
-3763
-3764         master->failover_state = SENTINEL_FAILOVER_STATE_UPDATE_CONFIG;
-3765         master->failover_state_change_time = mstime();
-3766     }
-```
+    最后讲讲sentinelFailoverDetectEnd这个函数，这个阶段的重要的failover state提升的逻辑还在里面呢。
 
-如果master->promoted_slave->flags表示promoted_slave sentinelRedisInstance处于SRI_S_DOWN状态是not reachable，则此处直接返回供后续重试。
+    ```
+    /* src/sentinel.c */
+    3729 void sentinelFailoverDetectEnd(sentinelRedisInstance *master) {
+    3730     int not_reconfigured = 0, timeout = 0;
+    3731     dictIterator *di;
+    3732     dictEntry *de;
+    3733     mstime_t elapsed = mstime() - master->failover_state_change_time;
+    3734
+    3735     /* We can't consider failover finished if the promoted slave is
+    3736      * not reachable. */
+    3737     if (master->promoted_slave == NULL ||
+    3738         master->promoted_slave->flags & SRI_S_DOWN) return;
+    3739
+    3740     /* The failover terminates once all the reachable slaves are properly
+    3741      * configured. */
+    3742     di = dictGetIterator(master->slaves);
+    3743     while((de = dictNext(di)) != NULL) {
+    3744         sentinelRedisInstance *slave = dictGetVal(de);
+    3745
+    3746         if (slave->flags & (SRI_PROMOTED|SRI_RECONF_DONE)) continue;
+    3747         if (slave->flags & SRI_S_DOWN) continue;
+    3748         not_reconfigured++;
+    3749     }
+    3750     dictReleaseIterator(di);
+    3759
+    3760     if (not_reconfigured == 0) {
+    3761         sentinelEvent(REDIS_WARNING,"+failover-end",master,"%@ %llu",
+    3762             (unsigned long long) master->failover_epoch);
+    3763
+    3764         master->failover_state = SENTINEL_FAILOVER_STATE_UPDATE_CONFIG;
+    3765         master->failover_state_change_time = mstime();
+    3766     }
+    ```
 
-然后统计所有reachable的slave sentinelRedisInstance中还没有被reconfg的数量，注意这里如果slave sentinelRedisInstance处于SRI_S_DOWN状态也会略过，不计入not_reconfigured。
+    如果master->promoted_slave->flags表示promoted_slave sentinelRedisInstance处于
+    SRI_S_DOWN状态即not reachable，则此处直接返回供后续重试。
+    **注意如果在此处直接返回，则连超时检查逻辑都不会执行，想达到+failover-end-for-timeout的状态
+    都不会被允许,**关于+failover-end-for-timeout后续会详细解释。
 
-如果上面的策略统计出来not_reconfigured为0，则将master->failover_state由SENTINEL_FAILOVER_STATE_RECONF_SLAVES提升为SENTINEL_FAILOVER_STATE_UPDATE_CONFIG状态，并且输出+failover-end的消息，至此failover的主要使命就完成了，不过还有一些收尾操作，后续马上会讲。
+    然后统计所有reachable的slave sentinelRedisInstance中还没有被reconfg的数量，
+    注意这里如果slave sentinelRedisInstance处于SRI_S_DOWN状态也会略过，不计入not_reconfigured。
+
+    如果上面的策略统计出来not_reconfigured为0，则将master->failover_state由
+    SENTINEL_FAILOVER_STATE_RECONF_SLAVES提升为SENTINEL_FAILOVER_STATE_UPDATE_CONFIG状态，
+    并且输出+failover-end的消息，至此failover的主要使命就完成了，不过还有一些收尾操作，后续马上会讲。
 
 至此sentinelFailoverStateMachine就讲完了，并且sentinelHandleRedisInstance就讲完了.
 
