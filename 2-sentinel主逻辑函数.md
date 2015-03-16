@@ -374,7 +374,7 @@ sentinelSendHello后续章节会详细解释，这里解释一下sentinelInfoRep
 
     接下来，详细看一下sentinelRefreshInstanceInfo的逻辑。
 
-    -
+    - ri->info
 
         ```
         /* src/sentinel.c */
@@ -389,7 +389,7 @@ sentinelSendHello后续章节会详细解释，这里解释一下sentinelInfoRep
         可以看到ri->info的作用就是用来直接缓存整个从指向的redis instance获取到的info的。
         ri->info_refresh只是记录了更新info的之后的那个时间点。
 
-    -
+    - 发现slave
 
         ```
         /* src/sentinel.c */
@@ -411,7 +411,7 @@ sentinelSendHello后续章节会详细解释，这里解释一下sentinelInfoRep
         之前也提到过，从master的info中发现该master下未知的slave，
         若有发现，则作为slave挂载在当前master sentinelRedisInstance之下。
 
-    -
+    - master_link_down_time
 
         ```
         /* src/sentinel.c */
@@ -431,7 +431,7 @@ sentinelSendHello后续章节会详细解释，这里解释一下sentinelInfoRep
         slave的sentinelRedisInstance struct会将该信息记录在ri->master_link_down_time中。
         关于master_link_down_since_seconds的细节后续会详细介绍。
 
-    -
+    - info中的role章节
 
         ```
         /* src/sentinel.c */
@@ -545,7 +545,7 @@ sentinelSendHello后续章节会详细解释，这里解释一下sentinelInfoRep
 
     下面讲一些根据info信息主观判断参与的部分,
 
-    -
+    - Handle slave -> master role switch
 
         ```
         /* src/sentinel.c */
