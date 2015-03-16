@@ -320,17 +320,17 @@ ri->flags & (SRI_MASTER|SRI_SLAVE)来说，是指cc或者pc中任意一个处于
 
 先看sentinelSendPeriodicCommands的前半部分，
 
-    - 如果是SRI_DISCONNECTED，就跳过。
+- 如果是SRI_DISCONNECTED，就跳过。
 
-    - 并且设置了一个最大的SENTINEL_MAX_PENDING_COMMANDS的上限, 默认是100，达到上限之后，
-    暂时不再增加，除非老的未响应的连接超时被杀掉腾出位置来。从这里可以看出，
-    如果监控一批100个以上的redis instances，这个上限还是很紧张的。
+- 并且设置了一个最大的SENTINEL_MAX_PENDING_COMMANDS的上限, 默认是100，达到上限之后，
+暂时不再增加，除非老的未响应的连接超时被杀掉腾出位置来。从这里可以看出，
+如果监控一批100个以上的redis instances，这个上限还是很紧张的。
 
-    - info_period, SENTINEL_INFO_PERIOD默认是10000ms，如果这个
-    sentinelRedisInstance是表示slave的，并且该slave的master处于odown甚至是failover in progress时，
-    info_period是1000ms，以更快得到该slave可能被提升为master而产生的角色变更信息。
+- info_period, SENTINEL_INFO_PERIOD默认是10000ms，如果这个
+sentinelRedisInstance是表示slave的，并且该slave的master处于odown甚至是failover in progress时，
+info_period是1000ms，以更快得到该slave可能被提升为master而产生的角色变更信息。
 
-    - ping_period是指min(1000ms,down-after-milliseconds)
+- ping_period是指min(1000ms,down-after-milliseconds)
 
 ```
 /* src/sentinel.c */
@@ -354,7 +354,8 @@ ri->flags & (SRI_MASTER|SRI_SLAVE)来说，是指cc或者pc中任意一个处于
 2392     }
 ```
 
-可以看到info只是作用于master或者slave角色的sentinelRedisInstance struct上，
+再看sentinelSendPeriodicCommands的后半部分，可以看到info只是作用于master或者slave角色的sentinelRedisInstance struct上，
+而sentinelSendPing,sentinelSendHello是作用于三种role的sentinelRedisInstance struct上,
 sentinelSendHello后续章节会详细解释，这里解释一下sentinelInfoReplyCallback, sentinelSendPing这两个func。
 
 - sentinelInfoReplyCallback
@@ -609,7 +610,7 @@ sentinelSendHello后续章节会详细解释，这里解释一下sentinelInfoRep
         如果不是上面的情况, 如果以下几个条件同时满足(mstime_t wait_time = SENTINEL_PUBLISH_PERIOD*4; 8s)
 
         - 如果该slave sentinelRedisInstance没有被我们标记为SRI_PROMOTED,
-        这里稍微岔开以下，提一下关于SRI_PROMOTED另外几个值得注意的点有，
+        这里稍微岔开一下，提一下关于SRI_PROMOTED另外几个值得注意的点有，
 
             - 会在回收sentinelRedisInstance处理SRI_PROMOTED状态的slave的master的promoted_slave属性。
 
@@ -714,9 +715,9 @@ sentinelSendHello后续章节会详细解释，这里解释一下sentinelInfoRep
     1789 /* Process the INFO output from masters. */
     1790 void sentinelRefreshInstanceInfo(sentinelRedisInstance *ri, const char *info) {
     1988     /* Handle slaves replicating to a different master address. */
-      1989     if ((ri->flags & SRI_SLAVE) &&
-      1990         role == SRI_SLAVE &&
-      1991         (ri->slave_master_port != ri->master->addr->port ||
+    1989     if ((ri->flags & SRI_SLAVE) &&
+    1990         role == SRI_SLAVE &&
+    1991         (ri->slave_master_port != ri->master->addr->port ||
     1992          strcasecmp(ri->slave_master_host,ri->master->addr->ip)))
     1993     {
     1994         mstime_t wait_time = ri->master->failover_timeout;
