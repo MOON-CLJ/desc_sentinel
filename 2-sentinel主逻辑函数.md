@@ -254,17 +254,17 @@ sentinelHandleRedisInstance里的每个函数都很有意思，后续章节会�
         **从此处可以看出当前sentinel只是同master或者slave instance建立了pc连接，并且
         只订阅了SENTINEL_HELLO_CHANNEL这个频道，用于被动的接受新鲜的消息。**
 
-        有几个flag需要注意：
+有几个flag需要注意：
 
-        - SRI_MASTER 表示这个sentinelRedisInstance struct表示的role是master
+- SRI_MASTER 表示这个sentinelRedisInstance struct表示的role是master
 
-        - SRI_SLAVE 表示这个sentinelRedisInstance struct表示的role是slave
+- SRI_SLAVE 表示这个sentinelRedisInstance struct表示的role是slave
 
-        - SRI_SENTINEL 表示这个sentinelRedisInstance struct表示的role是sentinel
+- SRI_SENTINEL 表示这个sentinelRedisInstance struct表示的role是sentinel
 
-        - SRI_DISCONNECTED 对于表示master或者slave的sentinelRedisInstance struct即
-        ri->flags & (SRI_MASTER|SRI_SLAVE)来说，是指cc或者pc中任意一个处于未响应的状态，
-        对于ri->flags & SRI_SENTINEL来讲,是指cc处于未响应的状态。
+- SRI_DISCONNECTED 对于表示master或者slave的sentinelRedisInstance struct即
+ri->flags & (SRI_MASTER|SRI_SLAVE)来说，是指cc或者pc中任意一个处于未响应的状态，
+对于ri->flags & SRI_SENTINEL来讲,是指cc处于未响应的状态。
 
 ### **sentinelSendPeriodicCommands**
 
@@ -318,322 +318,397 @@ sentinelHandleRedisInstance里的每个函数都很有意思，后续章节会�
 2376     if (ping_period > SENTINEL_PING_PERIOD) ping_period = SENTINEL_PING_PERIOD;
 ```
 
-    先看sentinelSendPeriodicCommands的前半部分，如果是SRI_DISCONNECTED，就跳过。
-    
-    并且设置了一个最大的pending commands的上限, 默认是100，达到上限之后，不再增加，除非老的未响应的连接超时被杀掉腾出位置来。从这里可以看出，如果监控一批100个以上的redis instances，这个上限还是很紧张的。
-    
-    info_period默认是10000ms，如果这个sentinelRedisInstance是表示slave的，并且该slave的master处于odown甚至是failover时，info_period是1000ms，以更快得得到该slave可能被提升为master而产生的角色变更信息。
-    
-    ping_period是指min(1000ms,down-after-milliseconds)
-    
-    ```
-    /* src/sentinel.c */
-    2342 /* Send periodic PING, INFO, and PUBLISH to the Hello channel to
-    2343  * the specified master or slave instance. */
-    2344 void sentinelSendPeriodicCommands(sentinelRedisInstance *ri) {
-    2345     mstime_t now = mstime();
-    2378     if ((ri->flags & SRI_SENTINEL) == 0 &&
-    2379         (ri->info_refresh == 0 ||                                                                                                                                                                        2380         (now - ri->info_refresh) > info_period))
-    2381     {
-    2382         /* Send INFO to masters and slaves, not sentinels. */
-    2383         retval = redisAsyncCommand(ri->cc,
-    2384             sentinelInfoReplyCallback, NULL, "INFO");
-    2385         if (retval == REDIS_OK) ri->pending_commands++;
-    2386     } else if ((now - ri->last_pong_time) > ping_period) {
-    2387         /* Send PING to all the three kinds of instances. */
-    2388         sentinelSendPing(ri);
-    2389     } else if ((now - ri->last_pub_time) > SENTINEL_PUBLISH_PERIOD) {
-    2390         /* PUBLISH hello messages to all the three kinds of instances. */
-    2391         sentinelSendHello(ri);
-    2392     }
-    ```
+先看sentinelSendPeriodicCommands的前半部分，
 
-    可以看到info只是作用于master或者slave角色的sentinelRedisInstance struct上，sentinelSendHello后续章节会详细解释，这里解释一下sentinelInfoReplyCallback, sentinelSendPing这两个func。
-    
+    - 如果是SRI_DISCONNECTED，就跳过。
+
+    - 并且设置了一个最大的SENTINEL_MAX_PENDING_COMMANDS的上限, 默认是100，达到上限之后，
+    暂时不再增加，除非老的未响应的连接超时被杀掉腾出位置来。从这里可以看出，
+    如果监控一批100个以上的redis instances，这个上限还是很紧张的。
+
+    - info_period, SENTINEL_INFO_PERIOD默认是10000ms，如果这个
+    sentinelRedisInstance是表示slave的，并且该slave的master处于odown甚至是failover in progress时，
+    info_period是1000ms，以更快得到该slave可能被提升为master而产生的角色变更信息。
+
+    - ping_period是指min(1000ms,down-after-milliseconds)
+
+```
+/* src/sentinel.c */
+2342 /* Send periodic PING, INFO, and PUBLISH to the Hello channel to
+2343  * the specified master or slave instance. */
+2344 void sentinelSendPeriodicCommands(sentinelRedisInstance *ri) {
+2345     mstime_t now = mstime();
+2378     if ((ri->flags & SRI_SENTINEL) == 0 &&
+2379         (ri->info_refresh == 0 ||                                                                                                                                                                        2380         (now - ri->info_refresh) > info_period))
+2381     {
+2382         /* Send INFO to masters and slaves, not sentinels. */
+2383         retval = redisAsyncCommand(ri->cc,
+2384             sentinelInfoReplyCallback, NULL, "INFO");
+2385         if (retval == REDIS_OK) ri->pending_commands++;
+2386     } else if ((now - ri->last_pong_time) > ping_period) {
+2387         /* Send PING to all the three kinds of instances. */
+2388         sentinelSendPing(ri);
+2389     } else if ((now - ri->last_pub_time) > SENTINEL_PUBLISH_PERIOD) {
+2390         /* PUBLISH hello messages to all the three kinds of instances. */
+2391         sentinelSendHello(ri);
+2392     }
+```
+
+可以看到info只是作用于master或者slave角色的sentinelRedisInstance struct上，
+sentinelSendHello后续章节会详细解释，这里解释一下sentinelInfoReplyCallback, sentinelSendPing这两个func。
+
+- sentinelInfoReplyCallback
+
     ```
     /* src/sentinel.c */
     2038 void sentinelInfoReplyCallback(redisAsyncContext *c, void *reply, void *privdata) {
     2047     if (r->type == REDIS_REPLY_STRING) {
     2048         sentinelRefreshInstanceInfo(ri,r->str);
     2049     }
-    2050 }    
+    2050 }
     ```
-    由于这是一个callback方法，ri其实就是上面redisAsyncCommand的第一个参数相关的sentinelRedisInstance，只能表示master或者slave。
-    
-    ```
-    /* src/sentinel.c */
-    1789 /* Process the INFO output from masters. */
-    1790 void sentinelRefreshInstanceInfo(sentinelRedisInstance *ri, const char *info) {
-    1795     /* cache full INFO output for instance */
-    1796     sdsfree(ri->info);
-    1797     ri->info = sdsnew(info);
-    1911     ri->info_refresh = mstime();
-    ```
-    可以看到ri->info的作用就是用来直接缓存整个从指向的redis instance获取到的info的。ri->info_refresh只是记录了更新info的之后的那个时间点。
-    
-    ```
-    /* src/sentinel.c */
-    1789 /* Process the INFO output from masters. */
-    1790 void sentinelRefreshInstanceInfo(sentinelRedisInstance *ri, const char *info) {
-    1822         /* old versions: slave0:<ip>,<port>,<state>
-    1823          * new versions: slave0:ip=127.0.0.1,port=9999,... */
-    1824         if ((ri->flags & SRI_MASTER) &&
-    1825             sdslen(l) >= 7 &&
-    1826             !memcmp(l,"slave",5) && isdigit(l[5]))
-    1827         {
-    1850             /* Check if we already have this slave into our table,
-    1851              * otherwise add it. */
-    1852             if (sentinelRedisInstanceLookupSlave(ri,ip,atoi(port)) == NULL) {
-    1853                 if ((slave = createSentinelRedisInstance(NULL,SRI_SLAVE,ip,
-    1854                             atoi(port), ri->quorum, ri)) != NULL)
-    ```
-    之前也提到过，从master的info中发现该master下未知的slave，若有发现，则作为slave挂载在当前master sentinelRedisInstance之下。
-    
-    ```
-    /* src/sentinel.c */
-    1789 /* Process the INFO output from masters. */
-    1790 void sentinelRefreshInstanceInfo(sentinelRedisInstance *ri, const char *info) {
-    1861         /* master_link_down_since_seconds:<seconds> */
-    1862         if (sdslen(l) >= 32 &&
-    1863             !memcmp(l,"master_link_down_since_seconds",30))
-    1864         {
-    1865             ri->master_link_down_time = strtoll(l+31,NULL,10)*1000;
-    1866         }
-    ```
-    master_link_down_since_seconds:<seconds> 这是slave instance的info中的一部分，master instance的info中没有部分信息。也就只有表示slave的sentinelRedisInstance struct的这个信息才是有效的。
-    slave的sentinelRedisInstance struct 会将该信息记录在ri->master_link_down_time中。关于master_link_down_since_seconds的细节后续会详细介绍。
-    
-    ```
-    /* src/sentinel.c */
-    1789 /* Process the INFO output from masters. */
-    1790 void sentinelRefreshInstanceInfo(sentinelRedisInstance *ri, const char *info) {
-    1868         /* role:<role> */
-    1869         if (!memcmp(l,"role:master",11)) role = SRI_MASTER;
-    1870         else if (!memcmp(l,"role:slave",10)) role = SRI_SLAVE;
-    1871
-    1872         if (role == SRI_SLAVE) {
-    1873             /* master_host:<host> */
-    1874             if (sdslen(l) >= 12 && !memcmp(l,"master_host:",12)) {
-    1875                 if (ri->slave_master_host == NULL ||
-    1876                     strcasecmp(l+12,ri->slave_master_host))
-    1877                 {
-    1878                     sdsfree(ri->slave_master_host);
-    1879                     ri->slave_master_host = sdsnew(l+12);
-    1880                     ri->slave_conf_change_time = mstime();
-    1881                 }
-    1882             }
-    1883
-    1884             /* master_port:<port> */
-    1885             if (sdslen(l) >= 12 && !memcmp(l,"master_port:",12)) {
-    1886                 int slave_master_port = atoi(l+12);
-    1887
-    1888                 if (ri->slave_master_port != slave_master_port) {
-    1889                     ri->slave_master_port = slave_master_port;
-    1890                     ri->slave_conf_change_time = mstime();
-    1891                 }
-    1892             }
-    1893
-    1894             /* master_link_status:<status> */
-    1895             if (sdslen(l) >= 19 && !memcmp(l,"master_link_status:",19)) {
-    1896                 ri->slave_master_link_status =
-    1897                     (strcasecmp(l+19,"up") == 0) ?
-    1898                     SENTINEL_MASTER_LINK_STATUS_UP :
-    1899                     SENTINEL_MASTER_LINK_STATUS_DOWN;
-    1900             }
-    1901
-    1902             /* slave_priority:<priority> */
-    1903             if (sdslen(l) >= 15 && !memcmp(l,"slave_priority:",15))
-    1904                 ri->slave_priority = atoi(l+15);
-    1905
-    1906             /* slave_repl_offset:<offset> */
-    1907             if (sdslen(l) >= 18 && !memcmp(l,"slave_repl_offset:",18))
-    1908                 ri->slave_repl_offset = strtoull(l+18,NULL,10);
-    1909         }
-    1910     }
-    1918     /* Remember when the role changed. */
-    1919     if (role != ri->role_reported) {
-    1920         ri->role_reported_time = mstime();
-    1921         ri->role_reported = role;
-    1922         if (role == SRI_SLAVE) ri->slave_conf_change_time = mstime();
-    1923         /* Log the event with +role-change if the new role is coherent or
-    1924          * with -role-change if there is a mismatch with the current config. */
-    1925         sentinelEvent(REDIS_VERBOSE,
-    1926             ((ri->flags & (SRI_MASTER|SRI_SLAVE)) == role) ?
-    1927             "+role-change" : "-role-change",
-    1928             ri, "%@ new reported role is %s",
-    1929             role == SRI_MASTER ? "master" : "slave",
-    1930             ri->flags & SRI_MASTER ? "master" : "slave");
-    1931     }
-    ```
-    这部分是针对info中的role章节的，针对slave解析了ri->slave_master_host，ri->slave_master_port，ri->slave_master_link_status，ri->slave_priority，ri->slave_repl_offset这项几个信息出来，并且记录了ri->slave_master_host，ri->slave_master_port这两个值变动的时间到ri->slave_conf_change_time。
-    
-    - ri->slave_master_host 就是slave sentinelRedisInstance用来记录指向的redis instance认为从info中暴露出来的master_host信息的。ri->slave_master_port同理。如果slave sentinelRedisInstance被转换为master sentinelRedisInstance，ri->slave_master_host会被置为NULL。
-    
-    - ri->slave_conf_change_time 值得注意的几点是，有且仅有以下几点，
-        - 记录ri->slave_master_host变更时间
-        
-        - 记录ri->slave_master_port变更时间
-        
-        - 记录该sentinelRedisInstance之前的role为master，现在从指向instance的info中报告是slave的变更时间。
-        
-        - 所有role的sentinelRedisInstance的这个属性在初始化的时候被初始为初始当时的时间。
-    
-    - ri->slave_master_link_status 是slave sentinelRedisInstance用来记录从info中暴露出来的slave和其master的master_link_status状态信息。关于master_link_status后续章节会详细介绍。
-    
-    - ri->slave_priority 是slave sentinelRedisInstance用来记录从info中暴露出来的slave_priority信息。
-    
-    - ri->slave_repl_offset 是slave sentinelRedisInstance用来记录从info中暴露出来的slave_repl_offset信息。
-    
-    ri->slave_priority，ri->slave_repl_offset是failover发生时选择好的slave的考虑因素。
-    
-    这的注意的是ri->flags除了SRI_RECONF_xxx系列之外的其他flag位包括SRI_MASTER,SRI_SLAVE并不会直接被从info得到的信息更新。SRI_RECONF_xxx系列后续会详细介绍。所以可以看到"+role-change"、"-role-change"这两种message的区别是，"+role-change"是flags已经在之前被更新，新来的info信息报告吻合了之前的flags更改。"-role-change"则是新报告的info信息和现有的flags不吻合。
 
-    - ri->role_reported, ri->role_reported_time
-        
-        - role_reported被初始化为该sentinelRedisInstance创建的role, ri->role_reported = ri->flags & (SRI_MASTER|SRI_SLAVE); 如果role是sentinel，则此flags所有位都是0.
-        
-        - 当该sentinelRedisInstance被reset 成master角色被重置时，会将ri->role_reported = SRI_MASTER; sentinelResetMaster的细节后续会详细介绍。
-        
-        - 当然也会用来记录，已经记录的role信息同info信息中暴露的信息不同时的变更。
-        
-    上面sentinelRefreshInstanceInfo讲的是被动接受记录info信息部分。
-    
-    下面讲一些根据info信息主观判断参与的部分。
-    
-    ```
-    /* src/sentinel.c */
-    1789 /* Process the INFO output from masters. */
-    1790 void sentinelRefreshInstanceInfo(sentinelRedisInstance *ri, const char *info) {
-    1944     /* Handle slave -> master role switch. */
-    1945     if ((ri->flags & SRI_SLAVE) && role == SRI_MASTER) {
-    1946         /* If this is a promoted slave we can change state to the
-    1947          * failover state machine. */
-    1948         if ((ri->flags & SRI_PROMOTED) &&
-    1949             (ri->master->flags & SRI_FAILOVER_IN_PROGRESS) &&
-    1950             (ri->master->failover_state ==
-    1951                 SENTINEL_FAILOVER_STATE_WAIT_PROMOTION))
-    1952         {
-    1953             /* Now that we are sure the slave was reconfigured as a master
-    1954              * set the master configuration epoch to the epoch we won the
-    1955              * election to perform this failover. This will force the other
-    1956              * Sentinels to update their config (assuming there is not
-    1957              * a newer one already available). */
-    1958             ri->master->config_epoch = ri->master->failover_epoch;
-    1959             ri->master->failover_state = SENTINEL_FAILOVER_STATE_RECONF_SLAVES;
-    1960             ri->master->failover_state_change_time = mstime();
-    1961             sentinelFlushConfig();
-    1962             sentinelEvent(REDIS_WARNING,"+promoted-slave",ri,"%@");
-    1963             sentinelEvent(REDIS_WARNING,"+failover-state-reconf-slaves",
-    1964                 ri->master,"%@");
-    1965             sentinelCallClientReconfScript(ri->master,SENTINEL_LEADER,
-    1966                 "start",ri->master->addr,ri->addr);
-    1967             sentinelForceHelloUpdateForMaster(ri->master);
-    1968         } else {
-    1969             /* A slave turned into a master. We want to force our view and
-    1970              * reconfigure as slave. Wait some time after the change before
-    1971              * going forward, to receive new configs if any. */
-    1972             mstime_t wait_time = SENTINEL_PUBLISH_PERIOD*4;
-    1973
-    1974             if (!(ri->flags & SRI_PROMOTED) &&
-    1975                  sentinelMasterLooksSane(ri->master) &&
-    1976                  sentinelRedisInstanceNoDownFor(ri,wait_time) &&
-    1977                  mstime() - ri->role_reported_time > wait_time)
-    1978             {
-    1979                 int retval = sentinelSendSlaveOf(ri,
-    1980                         ri->master->addr->ip,
-    1981                         ri->master->addr->port);
-    1982                 if (retval == REDIS_OK)
-    1983                     sentinelEvent(REDIS_NOTICE,"+convert-to-slave",ri,"%@");
-    1984             }
-    1985         }
-    1986     }
-    ```
-    Handle slave -> master role switch. 在当前的ri是role为slave的sentinelRedisInstance，而指向的redis instance确报告自己为master这样的情况下，有以下几部分逻辑，
-    
-    - 如果此时从我们记录的状态来看，该slave sentinelRedisInstance确实是被标记为SRI_PROMOTED，并且ri->master->failover_state为SENTINEL_FAILOVER_STATE_WAIT_PROMOTION，表示failover正在进行中，并且此slave sentinelRedisInstance就是被promote为master的。则会完成首先在此完成提升的这一步的config变更，关于failover和这个config变更的细节后续会详细讨论。
-    
-    - 如果不是上面的情况, 如果以下几个条件同时满足（mstime_t wait_time = SENTINEL_PUBLISH_PERIOD*4; 8s)
-    
-        - 如果该slave sentinelRedisInstance没有被我们标记为SRI_PROMOTED,这里稍微岔开以下，提一下关于SRI_PROMOTED，另外几个值得注意的点有，
-        
+    由于这是一个callback方法，ri其实就是上面调用redisAsyncCommand时的第一个参数
+    ri->cc中ri相关的sentinelRedisInstance，只能表示master或者slave。
+
+    接下来，详细看一下sentinelRefreshInstanceInfo的逻辑。
+
+    -
+
+        ```
+        /* src/sentinel.c */
+        1789 /* Process the INFO output from masters. */
+        1790 void sentinelRefreshInstanceInfo(sentinelRedisInstance *ri, const char *info) {
+        1795     /* cache full INFO output for instance */
+        1796     sdsfree(ri->info);
+        1797     ri->info = sdsnew(info);
+        1911     ri->info_refresh = mstime();
+        ```
+
+        可以看到ri->info的作用就是用来直接缓存整个从指向的redis instance获取到的info的。
+        ri->info_refresh只是记录了更新info的之后的那个时间点。
+
+    -
+
+        ```
+        /* src/sentinel.c */
+        1789 /* Process the INFO output from masters. */
+        1790 void sentinelRefreshInstanceInfo(sentinelRedisInstance *ri, const char *info) {
+        1822         /* old versions: slave0:<ip>,<port>,<state>
+        1823          * new versions: slave0:ip=127.0.0.1,port=9999,... */
+        1824         if ((ri->flags & SRI_MASTER) &&
+        1825             sdslen(l) >= 7 &&
+        1826             !memcmp(l,"slave",5) && isdigit(l[5]))
+        1827         {
+        1850             /* Check if we already have this slave into our table,
+        1851              * otherwise add it. */
+        1852             if (sentinelRedisInstanceLookupSlave(ri,ip,atoi(port)) == NULL) {
+        1853                 if ((slave = createSentinelRedisInstance(NULL,SRI_SLAVE,ip,
+        1854                             atoi(port), ri->quorum, ri)) != NULL)
+        ```
+
+        之前也提到过，从master的info中发现该master下未知的slave，
+        若有发现，则作为slave挂载在当前master sentinelRedisInstance之下。
+
+    -
+
+        ```
+        /* src/sentinel.c */
+        1789 /* Process the INFO output from masters. */
+        1790 void sentinelRefreshInstanceInfo(sentinelRedisInstance *ri, const char *info) {
+        1861         /* master_link_down_since_seconds:<seconds> */
+        1862         if (sdslen(l) >= 32 &&
+        1863             !memcmp(l,"master_link_down_since_seconds",30))
+        1864         {
+        1865             ri->master_link_down_time = strtoll(l+31,NULL,10)*1000;
+        1866         }
+        ```
+
+        master_link_down_since_seconds:<seconds> 这是slave instance的info中的一部分，
+        master instance的info中没有部分信息。也就只有表示slave的sentinelRedisInstance struct的
+        这个信息才是有效的。
+        slave的sentinelRedisInstance struct会将该信息记录在ri->master_link_down_time中。
+        关于master_link_down_since_seconds的细节后续会详细介绍。
+
+    -
+
+        ```
+        /* src/sentinel.c */
+        1789 /* Process the INFO output from masters. */
+        1790 void sentinelRefreshInstanceInfo(sentinelRedisInstance *ri, const char *info) {
+        1868         /* role:<role> */
+        1869         if (!memcmp(l,"role:master",11)) role = SRI_MASTER;
+        1870         else if (!memcmp(l,"role:slave",10)) role = SRI_SLAVE;
+        1871
+        1872         if (role == SRI_SLAVE) {
+        1873             /* master_host:<host> */
+        1874             if (sdslen(l) >= 12 && !memcmp(l,"master_host:",12)) {
+        1875                 if (ri->slave_master_host == NULL ||
+        1876                     strcasecmp(l+12,ri->slave_master_host))
+        1877                 {
+        1878                     sdsfree(ri->slave_master_host);
+        1879                     ri->slave_master_host = sdsnew(l+12);
+        1880                     ri->slave_conf_change_time = mstime();
+        1881                 }
+        1882             }
+        1883
+        1884             /* master_port:<port> */
+        1885             if (sdslen(l) >= 12 && !memcmp(l,"master_port:",12)) {
+        1886                 int slave_master_port = atoi(l+12);
+        1887
+        1888                 if (ri->slave_master_port != slave_master_port) {
+        1889                     ri->slave_master_port = slave_master_port;
+        1890                     ri->slave_conf_change_time = mstime();
+        1891                 }
+        1892             }
+        1893
+        1894             /* master_link_status:<status> */
+        1895             if (sdslen(l) >= 19 && !memcmp(l,"master_link_status:",19)) {
+        1896                 ri->slave_master_link_status =
+        1897                     (strcasecmp(l+19,"up") == 0) ?
+        1898                     SENTINEL_MASTER_LINK_STATUS_UP :
+        1899                     SENTINEL_MASTER_LINK_STATUS_DOWN;
+        1900             }
+        1901
+        1902             /* slave_priority:<priority> */
+        1903             if (sdslen(l) >= 15 && !memcmp(l,"slave_priority:",15))
+        1904                 ri->slave_priority = atoi(l+15);
+        1905
+        1906             /* slave_repl_offset:<offset> */
+        1907             if (sdslen(l) >= 18 && !memcmp(l,"slave_repl_offset:",18))
+        1908                 ri->slave_repl_offset = strtoull(l+18,NULL,10);
+        1909         }
+        1910     }
+        1918     /* Remember when the role changed. */
+        1919     if (role != ri->role_reported) {
+        1920         ri->role_reported_time = mstime();
+        1921         ri->role_reported = role;
+        1922         if (role == SRI_SLAVE) ri->slave_conf_change_time = mstime();
+        1923         /* Log the event with +role-change if the new role is coherent or
+        1924          * with -role-change if there is a mismatch with the current config. */
+        1925         sentinelEvent(REDIS_VERBOSE,
+        1926             ((ri->flags & (SRI_MASTER|SRI_SLAVE)) == role) ?
+        1927             "+role-change" : "-role-change",
+        1928             ri, "%@ new reported role is %s",
+        1929             role == SRI_MASTER ? "master" : "slave",
+        1930             ri->flags & SRI_MASTER ? "master" : "slave");
+        1931     }
+        ```
+
+        这部分是针对info中的role章节的，针对slave解析了ri->slave_master_host，
+        ri->slave_master_port，ri->slave_master_link_status，ri->slave_priority，
+        ri->slave_repl_offset这项几个信息出来，并且记录了ri->slave_master_host，
+        ri->slave_master_port这两个值变动的时间到ri->slave_conf_change_time。
+
+        - ri->slave_master_host 就是slave sentinelRedisInstance用来记录指向的
+        redis instance认为从info中暴露出来的master_host信息的。ri->slave_master_port同理。
+
+        - ri->slave_conf_change_time 值得注意的几点是，有且仅有以下几点，
+
+            - 记录ri->slave_master_host变更时间
+
+            - 记录ri->slave_master_port变更时间
+
+            - 记录该sentinelRedisInstance之前的role为master，现在从指向
+            instance的info中报告是slave的变更时间。
+
+            - 所有role的sentinelRedisInstance的这个属性在初始化的时候被初始为初始当时的时间。
+
+        - ri->slave_master_link_status 是slave sentinelRedisInstance用来记录从info中暴露出来的
+        slave和其master的master_link_status状态信息。关于master_link_status后续章节会详细介绍。
+
+        - ri->slave_priority 是slave sentinelRedisInstance用来记录从info中暴露出来的slave_priority信息。
+
+        - ri->slave_repl_offset 是slave sentinelRedisInstance用来记录从info中暴露出来的slave_repl_offset信息。
+
+        ri->slave_priority，ri->slave_repl_offset是failover发生时选择好的slave的考虑因素。
+
+        此处注意的是ri->flags除了SRI_RECONF_xxx系列之外的其他flag位包括SRI_MASTER,SRI_SLAVE并
+        不会直接被从info得到的信息更新。SRI_RECONF_xxx系列后续会详细介绍。
+
+        可以看到"+role-change"、"-role-change"这两种message的区别是，"+role-change"是flags已经
+        在之前被更新，新来的info信息报告吻合了之前的flags更改。
+        "-role-change"则是新报告的info信息和现有的flags不吻合。
+
+        - ri->role_reported, ri->role_reported_time
+
+            - 记录已经当前的role信息同info信息中暴露的role信息不同时的变更情况。
+
+            - role_reported被初始化为该sentinelRedisInstance创建的role, ri->role_reported = ri->flags & (SRI_MASTER|SRI_SLAVE); 
+            如果role是sentinel，则此flags所有位都是0, 相当于是初始空白信息的含义.
+
+            - 当该sentinelRedisInstance被sentinelResetMaster重置时，会将ri->role_reported = SRI_MASTER;
+            sentinelResetMaster的细节后续会详细介绍。
+
+    上面讲的是sentinelRefreshInstanceInfo被动接受记录info信息的部分。
+
+    下面讲一些根据info信息主观判断参与的部分,
+
+    -
+
+        ```
+        /* src/sentinel.c */
+        1789 /* Process the INFO output from masters. */
+        1790 void sentinelRefreshInstanceInfo(sentinelRedisInstance *ri, const char *info) {
+        1944     /* Handle slave -> master role switch. */
+        1945     if ((ri->flags & SRI_SLAVE) && role == SRI_MASTER) {
+        1946         /* If this is a promoted slave we can change state to the
+        1947          * failover state machine. */
+        1948         if ((ri->flags & SRI_PROMOTED) &&
+        1949             (ri->master->flags & SRI_FAILOVER_IN_PROGRESS) &&
+        1950             (ri->master->failover_state ==
+        1951                 SENTINEL_FAILOVER_STATE_WAIT_PROMOTION))
+        1952         {
+        1953             /* Now that we are sure the slave was reconfigured as a master
+        1954              * set the master configuration epoch to the epoch we won the
+        1955              * election to perform this failover. This will force the other
+        1956              * Sentinels to update their config (assuming there is not
+        1957              * a newer one already available). */
+        1958             ri->master->config_epoch = ri->master->failover_epoch;
+        1959             ri->master->failover_state = SENTINEL_FAILOVER_STATE_RECONF_SLAVES;
+        1960             ri->master->failover_state_change_time = mstime();
+        1961             sentinelFlushConfig();
+        1962             sentinelEvent(REDIS_WARNING,"+promoted-slave",ri,"%@");
+        1963             sentinelEvent(REDIS_WARNING,"+failover-state-reconf-slaves",
+        1964                 ri->master,"%@");
+        1965             sentinelCallClientReconfScript(ri->master,SENTINEL_LEADER,
+        1966                 "start",ri->master->addr,ri->addr);
+        1967             sentinelForceHelloUpdateForMaster(ri->master);
+        1968         } else {
+        1969             /* A slave turned into a master. We want to force our view and
+        1970              * reconfigure as slave. Wait some time after the change before
+        1971              * going forward, to receive new configs if any. */
+        1972             mstime_t wait_time = SENTINEL_PUBLISH_PERIOD*4;
+        1973
+        1974             if (!(ri->flags & SRI_PROMOTED) &&
+        1975                  sentinelMasterLooksSane(ri->master) &&
+        1976                  sentinelRedisInstanceNoDownFor(ri,wait_time) &&
+        1977                  mstime() - ri->role_reported_time > wait_time)
+        1978             {
+        1979                 int retval = sentinelSendSlaveOf(ri,
+        1980                         ri->master->addr->ip,
+        1981                         ri->master->addr->port);
+        1982                 if (retval == REDIS_OK)
+        1983                     sentinelEvent(REDIS_NOTICE,"+convert-to-slave",ri,"%@");
+        1984             }
+        1985         }
+        1986     }
+        ```
+
+        Handle slave -> master role switch.
+
+        **在当前的ri是role为slave的sentinelRedisInstance，而指向的redis instance的info信息中确报告自己为master.
+        这是我们遇到的第一种role信息不吻合的情况。**
+        这样的情况下，有以下几部分逻辑，
+
+        如果此时从我们记录的状态来看，该slave sentinelRedisInstance确实是被标记为SRI_PROMOTED，
+        并且ri->master->failover_state为SENTINEL_FAILOVER_STATE_WAIT_PROMOTION，表示相应的master的failover正在进行中，
+        并且此slave sentinelRedisInstance就是被promote为master的promoted_slave。则首先在此完成upgrade config这一变更，
+        关于failover和这个upgrade config变更的细节后续会详细讨论。
+
+        如果不是上面的情况, 如果以下几个条件同时满足(mstime_t wait_time = SENTINEL_PUBLISH_PERIOD*4; 8s)
+
+        - 如果该slave sentinelRedisInstance没有被我们标记为SRI_PROMOTED,
+        这里稍微岔开以下，提一下关于SRI_PROMOTED另外几个值得注意的点有，
+
             - 会在回收sentinelRedisInstance处理SRI_PROMOTED状态的slave的master的promoted_slave属性。
-            
+
+                ```
+                /* src/sentinel.c */
+                997 /* Release this instance and all its slaves, sentinels, hiredis connections.
+                998  * This function does not take care of unlinking the instance from the main
+                999  * masters table (if it is a master) or from its master sentinels/slaves table
+                1000  * if it is a slave or sentinel. */
+                1001 void releaseSentinelRedisInstance(sentinelRedisInstance *ri) {
+                1021     /* Clear state into the master if needed. */
+                1022     if ((ri->flags & SRI_SLAVE) && (ri->flags & SRI_PROMOTED) && ri->master)
+                1023         ri->master->promoted_slave = NULL;
+                ```
+
+            - 会在failover的过程中，被选中的slave sentinelRedisInstance会被置SRI_PROMOTED状态，
+            并且将master sentinelRedisInstance的promoted_slave记录为此slave sentinelRedisInstance。
+
+                ```
+                3668 void sentinelFailoverSelectSlave(sentinelRedisInstance *ri) {
+                3669     sentinelRedisInstance *slave = sentinelSelectSlave(ri);
+                3670
+                3671     /* We don't handle the timeout in this state as the function aborts
+                3672      * the failover or go forward in the next state. */
+                3673     if (slave == NULL) {
+                3677     } else {
+                3678         sentinelEvent(REDIS_WARNING,"+selected-slave",slave,"%@");
+                3679         slave->flags |= SRI_PROMOTED;
+                3680         ri->promoted_slave = slave;
+                3685     }
+                3686 }
+                ```
+
+            - 值得注意的是，ri->promoted_slave以及SRI_PROMOTED，只有进行某个master的failiover的
+            sentinel instance的该master sentinelRedisInstance struct里才会记录的相关状态，
+            SRI_PROMOTED只有该sentinel instance该master sentinelRedisInstance下的某个被选中
+            准备提升为master的slave sentinelRedisInstance才有。
+            这两个属性不会传播给其他sentinel instance。后续还会提到SRI_PROMOTED用于在
+            sentinelFailoverDetectEnd和sentinelFailoverReconfNextSlave中skip掉某些逻辑的用途。
+
+        - sentinelMasterLooksSane(ri->master)
+
             ```
             /* src/sentinel.c */
-            997 /* Release this instance and all its slaves, sentinels, hiredis connections.
-            998  * This function does not take care of unlinking the instance from the main
-            999  * masters table (if it is a master) or from its master sentinels/slaves table
-            1000  * if it is a slave or sentinel. */
-            1001 void releaseSentinelRedisInstance(sentinelRedisInstance *ri) {
-            1021     /* Clear state into the master if needed. */
-            1022     if ((ri->flags & SRI_SLAVE) && (ri->flags & SRI_PROMOTED) && ri->master)
-            1023         ri->master->promoted_slave = NULL;
+            1776 /* Return true if master looks "sane", that is:
+            1777  * 1) It is actually a master in the current configuration.
+            1778  * 2) It reports itself as a master.
+            1779  * 3) It is not SDOWN or ODOWN.
+            1780  * 4) We obtained last INFO no more than two times the INFO period time ago. */
+            1781 int sentinelMasterLooksSane(sentinelRedisInstance *master) {
+            1782     return
+            1783         master->flags & SRI_MASTER &&
+            1784         master->role_reported == SRI_MASTER &&
+            1785         (master->flags & (SRI_S_DOWN|SRI_O_DOWN)) == 0 &&
+            1786         (mstime() - master->info_refresh) < SENTINEL_INFO_PERIOD*2;
+            1787 }
             ```
-            
-            - 会在failover的过程中，被选中的slave sentinelRedisInstance会被置SRI_PROMOTED状态，并且将master sentinelRedisInstance的promoted_slave记录为此slave sentinelRedisInstance。
-            
-            ```            
-            3668 void sentinelFailoverSelectSlave(sentinelRedisInstance *ri) {
-            3669     sentinelRedisInstance *slave = sentinelSelectSlave(ri);
-            3670
-            3671     /* We don't handle the timeout in this state as the function aborts
-            3672      * the failover or go forward in the next state. */
-            3673     if (slave == NULL) {
-            3677     } else {
-            3678         sentinelEvent(REDIS_WARNING,"+selected-slave",slave,"%@");
-            3679         slave->flags |= SRI_PROMOTED;
-            3680         ri->promoted_slave = slave;
-            3685     }
-            3686 }
-            ```
-            
-            - 值得注意的是，ri->promoted_slave以及SRI_PROMOTED，只有进行某个master的failiover的sentinel的该master struct里才会记录的相关状态，这两个属性不会传播给其他sentinel。后续还会提到SRI_PROMOTED用于在sentinelFailoverDetectEnd和sentinelFailoverReconfNextSlave中skip掉某些逻辑的用途。
-            
-        - sentinelMasterLooksSane(ri->master)
-        
-        ```
-        /* src/sentinel.c */
-        1776 /* Return true if master looks "sane", that is:
-        1777  * 1) It is actually a master in the current configuration.
-        1778  * 2) It reports itself as a master.
-        1779  * 3) It is not SDOWN or ODOWN.
-        1780  * 4) We obtained last INFO no more than two times the INFO period time ago. */
-        1781 int sentinelMasterLooksSane(sentinelRedisInstance *master) {
-        1782     return
-        1783         master->flags & SRI_MASTER &&
-        1784         master->role_reported == SRI_MASTER &&
-        1785         (master->flags & (SRI_S_DOWN|SRI_O_DOWN)) == 0 &&
-        1786         (mstime() - master->info_refresh) < SENTINEL_INFO_PERIOD*2;
-        1787 }
-        ```
-        
-        如果slave sentinelRedisInstance指向master sentinelRedisInstance, 该master sentinelRedisInstance标记自己是SRI_MASTER并且记录的role_reported也是SRI_MASTER，并且没有处于sdown，odown状态，并且距离上一次info更新时间在两个SENTINEL_INFO_PERIOD之内，即20s以内。则认为master看起来不错。
-                    
+
+            如果,
+
+            - 该slave sentinelRedisInstance指向的master sentinelRedisInstance,
+            该master sentinelRedisInstance标记自己是SRI_MASTER并且记录的role_reported也是SRI_MASTER，
+
+            - 并且没有处于sdown，odown状态，
+
+            - 并且距离上一次info更新时间在两个SENTINEL_INFO_PERIOD之内，即20s以内。
+
+            则认为master看起来不错。
+
         - sentinelRedisInstanceNoDownFor(ri,wait_time)
-        
-        ```
-        /* src/sentinel.c */
-        1286 /* Return non-zero if there was no SDOWN or ODOWN error associated to this
-        1287  * instance in the latest 'ms' milliseconds. */
-        1288 int sentinelRedisInstanceNoDownFor(sentinelRedisInstance *ri, mstime_t ms) {
-        1289     mstime_t most_recent;
-        1290
-        1291     most_recent = ri->s_down_since_time;
-        1292     if (ri->o_down_since_time > most_recent)
-        1293         most_recent = ri->o_down_since_time;
-        1294     return most_recent == 0 || (mstime() - most_recent) > ms;
-        1295 }
-        ```
-        如果距离master sentinelRedisInstance记录的最近一次down掉的时间大于wait_time 8s的话，则为true
-        
+
+            ```
+            /* src/sentinel.c */
+            1286 /* Return non-zero if there was no SDOWN or ODOWN error associated to this
+            1287  * instance in the latest 'ms' milliseconds. */
+            1288 int sentinelRedisInstanceNoDownFor(sentinelRedisInstance *ri, mstime_t ms) {
+            1289     mstime_t most_recent;
+            1290
+            1291     most_recent = ri->s_down_since_time;
+            1292     if (ri->o_down_since_time > most_recent)
+            1293         most_recent = ri->o_down_since_time;
+            1294     return most_recent == 0 || (mstime() - most_recent) > ms;
+            1295 }
+            ```
+
+            如果距离master sentinelRedisInstance记录的最近一次sdown或者odown掉的时间大于wait_time 8s的话，则为真.
+
         - mstime() - ri->role_reported_time > wait_time
-        
-        距离上一次role_reported的时间也得大于wait_time，即这个role_reported已经持续了这么长时间，同上面一项合作起来的意思是想表明该master sentinelRedisInstance在wait_time这段时间内没有down过，并且role_reported持续了wait_time没有变过。
-        
-        上面几个条件完全满足的话，此时会尝试发送sentinelSendSlaveOf纠正这个info中报告自己是master的instance SlaveOf 我们config中的master，以配合sentinel的config记录的那样。并且输出"+convert-to-slave"这样的message，我个人认为要尽量避免这个message出现。
-        
+
+            距离上一次role_reported的时间也得大于wait_time，即这个role的role_reported已经持续了这么长时间，
+            同上面一项合起来的意思是想表明该slave sentinelRedisInstance在wait_time这段时间内没有sdown或者odown过，
+            并且role_reported持续了wait_time没有变过。
+
+        上面几个条件完全满足的话，此时会尝试发送sentinelSendSlaveOf纠正这个info中报告自己是master的
+        instance SlaveOf我们config中的master，以配合sentinel的config记录的那样。并且
+        输出"+convert-to-slave"这样的message，我个人认为要尽量避免这个message出现。
+
     继续讲sentinelRefreshInstanceInfo的剩余部分，
-    
+
     ```
     /* src/sentinel.c */
     1789 /* Process the INFO output from masters. */
