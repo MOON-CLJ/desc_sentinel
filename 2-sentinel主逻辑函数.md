@@ -809,37 +809,46 @@ sentinelSendHello后续章节会详细解释，这里解释一下sentinelInfoRep
 
     - SRI_RECONF_SENT -> SRI_RECONF_INPROG
 
-        如果该slave sentinelRedisInstance处于SRI_RECONF_SENT状态，并且该slave sentinelRedisInstance指向的slave instance的info中报告的ri->slave_master_host和ri->slave_master_port和该slave sentinelRedisInstance记录的ri->master->promoted_slave的host和port相吻合，则说明在sendslaveof cmd发出去之后，instance已经响应slave of完成，则标记flags为SRI_RECONF_INPROG进入到下一个阶段。
+        如果该slave sentinelRedisInstance处于SRI_RECONF_SENT状态，并且该
+        slave sentinelRedisInstance指向的slave instance的info中报告的ri->slave_master_host和
+        ri->slave_master_port和该slave sentinelRedisInstance记录的ri->master->promoted_slave的host和port相吻合，
+        则说明在sentinelSendSlaveOf cmd发出去之后，instance已经响应slave of完成，
+        则标记flags为SRI_RECONF_INPROG进入到下一个阶段。
 
     - SRI_RECONF_INPROG -> SRI_RECONF_DONE
 
-        如果该slave sentinelRedisInstance处于SRI_RECONF_SENT_INPROG状态，并且相应的slave instance的info中报告的ri->slave_master_link_status已经处于up状态，则认为整个reconf完成。关于master_link_status具体的含义后续会详细解释。
+        如果该slave sentinelRedisInstance处于SRI_RECONF_SENT_INPROG状态，
+        并且相应的slave instance的info中报告的ri->slave_master_link_status已经处于up状态，
+        则认为整个reconf完成。关于master_link_status具体的含义后续会详细解释。
 
     另外SRI_RECONF_xx系列还有以下几个用途，
 
-    - 主导failover过程的sentinel判断该次failover是否结束时，会判断处于该次failover的那个master sentinelRedisInstance挂载下的所有slave sentinelRedisInstance是否处于SRI_RECONF_DONE的状态，或者是SRI_PROMOTED状态，SRI_PROMOTED是因为该slave sentinelRedisInstance相应的slave instance就是这次failover过程中被选出来当做新的master的instance，不需要经历SRI_RECONF_xx系列。
-    
-    ```
-    /* src/sentinel.c */
-    3729 void sentinelFailoverDetectEnd(sentinelRedisInstance *master) {
-    3740     /* The failover terminates once all the reachable slaves are properly
-    3741      * configured. */
-    3742     di = dictGetIterator(master->slaves);
-    3743     while((de = dictNext(di)) != NULL) {
-    3744         sentinelRedisInstance *slave = dictGetVal(de);
-    3745
-    3746         if (slave->flags & (SRI_PROMOTED|SRI_RECONF_DONE)) continue;
-    3747         if (slave->flags & SRI_S_DOWN) continue;
-    3748         not_reconfigured++;
-    3749     }
-    3750     dictReleaseIterator(di);
-    ```
-    
+    - 主导failover过程的sentinel判断该次failover是否结束时，会判断处于该次failover的
+    master sentinelRedisInstance挂载下的所有slave sentinelRedisInstance是否处于SRI_RECONF_DONE的
+    状态或者是SRI_PROMOTED状态，SRI_PROMOTED是因为该slave sentinelRedisInstance相应的slave instance
+    就是这次failover过程中被选出来当做新的master的instance，不需要经历SRI_RECONF_xx系列。
+
+        ```
+        /* src/sentinel.c */
+        3729 void sentinelFailoverDetectEnd(sentinelRedisInstance *master) {
+        3740     /* The failover terminates once all the reachable slaves are properly
+        3741      * configured. */
+        3742     di = dictGetIterator(master->slaves);
+        3743     while((de = dictNext(di)) != NULL) {
+        3744         sentinelRedisInstance *slave = dictGetVal(de);
+        3745
+        3746         if (slave->flags & (SRI_PROMOTED|SRI_RECONF_DONE)) continue;
+        3747         if (slave->flags & SRI_S_DOWN) continue;
+        3748         not_reconfigured++;
+        3749     }
+        3750     dictReleaseIterator(di);
+        ```
+
     - SRI_RECONF_xx系列 在sentinelFailoverReconfNextSlave的详细作用后续会详细说明。
 
+    上面那么大的篇幅终于把info信息的处理这部分内容讲完了，除了sentinelInfoReplyCallback这个
+    定期收集info信息的逻辑之外，还有sentinelSendPing也是定期执行的。
 
-    上面那么大的篇幅终于把info信息的处理这部分内容讲完了，除了sentinelInfoReplyCallback这个定期收集info信息的逻辑之外，还有sentinelSendPing也是定期执行的。
-    
     ```
     /* src/sentinel.c */
     2342 /* Send periodic PING, INFO, and PUBLISH to the Hello channel to
@@ -848,7 +857,7 @@ sentinelSendHello后续章节会详细解释，这里解释一下sentinelInfoRep
     2386     } else if ((now - ri->last_pong_time) > ping_period) {
     2387         /* Send PING to all the three kinds of instances. */
     2388         sentinelSendPing(ri);
-    
+
     2322 /* Send a PING to the specified instance and refresh the last_ping_time
     2323  * if it is zero (that is, if we received a pong for the previous ping).
     2324  *
@@ -869,92 +878,99 @@ sentinelSendHello后续章节会详细解释，这里解释一下sentinelInfoRep
     2339     }
     2340 }
     ```
-    
-    可以看出来，ping这个cmd是发给master,slave,sentinel三种role的sentinelRedisInstance所指向的instance的，还可以看到该sentinelRedisInstance的ri->last_ping_time是在ri->last_ping_time为0这个初始状态才会更新的。last_ping_time和last_pong_time之间的恩怨如下。
-        
+
+    可以看出来，ping这个cmd是发给master,slave,sentinel三种role的sentinelRedisInstance所指向的instance的，
+    还可以看到该sentinelRedisInstance的ri->last_ping_time是在ri->last_ping_time为0这个初始状态才会更新的。
+
+    last_ping_time和last_pong_time之间的恩怨如下,
+
     - ri->last_ping_time, ri->last_pong_time初始化为初始当时时间
-    
-    ```
-    /* src/sentinel.c */
-    896 sentinelRedisInstance *createSentinelRedisInstance(char *name, int flags, char *hostname, int port, int quorum, sentinelRedisInstance *master) {
-    944     /* We set the last_ping_time to "now" even if we actually don't have yet
-     945      * a connection with the node, nor we sent a ping.
-     946      * This is useful to detect a timeout in case we'll not be able to connect
-     947      * with the node at all. */
-    948     ri->last_ping_time = mstime();
-     950     ri->last_pong_time = mstime();
-     
-     1164 #define SENTINEL_RESET_NO_SENTINELS (1<<0)
-    1165 void sentinelResetMaster(sentinelRedisInstance *ri, int flags) {
-    1188     ri->last_ping_time = mstime();
-    1189     ri->last_avail_time = mstime();
-    1190     ri->last_pong_time = mstime();
-    ```
-    
-    - 即ping cmd会在ri->last_pong_time最后更新距今已经大于一个ping_period间隔时间持续进行。
-    
-    ```
-    /* src/sentinel.c */
-    2342 /* Send periodic PING, INFO, and PUBLISH to the Hello channel to
-    2343  * the specified master or slave instance. */
-    2344 void sentinelSendPeriodicCommands(sentinelRedisInstance *ri) {
-    2386     } else if ((now - ri->last_pong_time) > ping_period) {
-    2387         /* Send PING to all the three kinds of instances. */
-    2388         sentinelSendPing(ri);
-    ```
-    
-    - 如果得到了acceptable reply，则更新ri->last_ping_time = 0;作为收到了acceptable reply信息的标记。值得注意的是收到任何reply即使没有收到acceptable reply，都会更新ri->last_pong_time,会影响上面一条的行为。
-    
-    ```
-    /* src/sentinel.c */
-    2062 void sentinelPingReplyCallback(redisAsyncContext *c, void *reply, void *privdata) {
-    2063     sentinelRedisInstance *ri = c->data;
-    2064     redisReply *r;
-    2065     REDIS_NOTUSED(privdata);
-    2066
-    2067     if (ri) ri->pending_commands--;
-    2068     if (!reply || !ri) return;
-    2069     r = reply;
-    2071     if (r->type == REDIS_REPLY_STATUS ||
-    2072         r->type == REDIS_REPLY_ERROR) {
-    2073         /* Update the "instance available" field only if this is an
-    2074          * acceptable reply. */
-    2075         if (strncmp(r->str,"PONG",4) == 0 ||
-    2076             strncmp(r->str,"LOADING",7) == 0 ||
-    2077             strncmp(r->str,"MASTERDOWN",10) == 0)
-    2078         {
-    2079             ri->last_avail_time = mstime();
-    2080             ri->last_ping_time = 0; /* Flag the pong as received. */
-    2096     ri->last_pong_time = mstime();
-    ```
 
-    - send ping cmd,如果此时ri->last_ping_time为0，这是一个从之前的ping获得了acceptable reply的标记，则再次更新ri->last_ping_time.表示获得acceptable reply之后最早一次pending的ping是什么时候发出去的。同时不为0也表示至少有一个ping cmd还在pending中，未获得回应。
-    
-    ```
-    /* src/sentinel.c */
-    2322 /* Send a PING to the specified instance and refresh the last_ping_time
-    2323  * if it is zero (that is, if we received a pong for the previous ping).
-    2324  *
-    2325  * On error zero is returned, and we can't consider the PING command
-    2326  * queued in the connection. */
-    2327 int sentinelSendPing(sentinelRedisInstance *ri) {
-    2328     int retval = redisAsyncCommand(ri->cc,
-    2329         sentinelPingReplyCallback, NULL, "PING");
-    2330     if (retval == REDIS_OK) {
-    2331         ri->pending_commands++;
-    2332         /* We update the ping time only if we received the pong for
-    2333          * the previous ping, otherwise we are technically waiting
-    2334          * since the first ping that did not received a reply. */
-    2335         if (ri->last_ping_time == 0) ri->last_ping_time = mstime();
-    2336         return 1;
-    2337     } else {
-    2338         return 0;
-    2339     }
-    2340 }
-    ```
-    
-    上面的ping pong恩怨占了sentinelPing的一部分逻辑，因为ri->last_ping_time，ri->last_pong_timer的更新并不仅是记录作用，ri->last_ping_time被用作sentinelCheckSubjectivelyDown的检查逻辑,具体细节后续会详细介绍。
-    
+        ```
+        /* src/sentinel.c */
+        896 sentinelRedisInstance *createSentinelRedisInstance(char *name, int flags, char *hostname, int port, int quorum, sentinelRedisInstance *master) {
+        944     /* We set the last_ping_time to "now" even if we actually don't have yet
+        945      * a connection with the node, nor we sent a ping.
+        946      * This is useful to detect a timeout in case we'll not be able to connect
+        947      * with the node at all. */
+        948     ri->last_ping_time = mstime();
+        950     ri->last_pong_time = mstime();
+
+        1164 #define SENTINEL_RESET_NO_SENTINELS (1<<0)
+        1165 void sentinelResetMaster(sentinelRedisInstance *ri, int flags) {
+        1188     ri->last_ping_time = mstime();
+        1189     ri->last_avail_time = mstime();
+        1190     ri->last_pong_time = mstime();
+        ```
+
+    - 即ping cmd会在ri->last_pong_time最后更新距今已经大于一个ping_period间隔时间持续进行。
+
+        ```
+        /* src/sentinel.c */
+        2342 /* Send periodic PING, INFO, and PUBLISH to the Hello channel to
+        2343  * the specified master or slave instance. */
+        2344 void sentinelSendPeriodicCommands(sentinelRedisInstance *ri) {
+        2386     } else if ((now - ri->last_pong_time) > ping_period) {
+        2387         /* Send PING to all the three kinds of instances. */
+        2388         sentinelSendPing(ri);
+        ```
+
+    - 如果得到了acceptable reply，则更新ri->last_ping_time = 0;作为收到了acceptable reply信息的标记。
+    值得注意的是收到任何reply即使不是acceptable reply，都会更新ri->last_pong_time,会影响上面一条的行为。
+
+        ```
+        /* src/sentinel.c */
+        2062 void sentinelPingReplyCallback(redisAsyncContext *c, void *reply, void *privdata) {
+        2063     sentinelRedisInstance *ri = c->data;
+        2064     redisReply *r;
+        2065     REDIS_NOTUSED(privdata);
+        2066
+        2067     if (ri) ri->pending_commands--;
+        2068     if (!reply || !ri) return;
+        2069     r = reply;
+        2071     if (r->type == REDIS_REPLY_STATUS ||
+        2072         r->type == REDIS_REPLY_ERROR) {
+        2073         /* Update the "instance available" field only if this is an
+        2074          * acceptable reply. */
+        2075         if (strncmp(r->str,"PONG",4) == 0 ||
+        2076             strncmp(r->str,"LOADING",7) == 0 ||
+        2077             strncmp(r->str,"MASTERDOWN",10) == 0)
+        2078         {
+        2079             ri->last_avail_time = mstime();
+        2080             ri->last_ping_time = 0; /* Flag the pong as received. */
+        2096     ri->last_pong_time = mstime();
+        ```
+
+    - send ping cmd,如果此时ri->last_ping_time为0，这是一个从之前的ping获得了acceptable reply的标记，
+    则再次更新ri->last_ping_time.表示获得acceptable reply之后最早一次pending的ping是什么时候发出去的。
+    同时ri->last_ping_time不为0也表示至少有一个ping cmd还在pending中，未获得回应。
+
+        ```
+        /* src/sentinel.c */
+        2322 /* Send a PING to the specified instance and refresh the last_ping_time
+        2323  * if it is zero (that is, if we received a pong for the previous ping).
+        2324  *
+        2325  * On error zero is returned, and we can't consider the PING command
+        2326  * queued in the connection. */
+        2327 int sentinelSendPing(sentinelRedisInstance *ri) {
+        2328     int retval = redisAsyncCommand(ri->cc,
+        2329         sentinelPingReplyCallback, NULL, "PING");
+        2330     if (retval == REDIS_OK) {
+        2331         ri->pending_commands++;
+        2332         /* We update the ping time only if we received the pong for
+        2333          * the previous ping, otherwise we are technically waiting
+        2334          * since the first ping that did not received a reply. */
+        2335         if (ri->last_ping_time == 0) ri->last_ping_time = mstime();
+        2336         return 1;
+        2337     } else {
+        2338         return 0;
+        2339     }
+        2340 }
+        ```
+
+    上面的ping pong恩怨占了sentinelPing的一部分逻辑，因为ri->last_ping_time，ri->last_pong_timer的更新
+    并不仅是记录作用，ri->last_ping_time被用作sentinelCheckSubjectivelyDown的检查逻辑,具体细节后续会详细介绍。
+
     sentinelPingReplyCallback的另外的逻辑
 
     ```
@@ -997,6 +1013,9 @@ sentinelSendHello后续章节会详细解释，这里解释一下sentinelInfoRep
     2097 }
     ```
 
-    - 在收到acceptable reply时，不仅更新ri->last_ping_time = 0;，并且更新了ri->last_avail_time，这个属性和ri->last_pong_time的不同区别就在于尽在acceptable reply时才更新ri->last_avail_time。这也是ri->last_avail_time的全部意义。
+    - 在收到acceptable reply时，不仅更新ri->last_ping_time = 0;，并且更新了ri->last_avail_time，
+    这个属性和ri->last_pong_time的不同区别就在于尽在acceptable reply时才更新ri->last_avail_time。
+    这也是ri->last_avail_time的全部意义。
 
-    - Send a SCRIPT KILL command if the instance appears to be down because of a busy script. 这也是SRI_SCRIPT_KILL_SENT的全部用途。
+    - Send a SCRIPT KILL command if the instance appears to be down because of a busy script.
+    这也是SRI_SCRIPT_KILL_SENT的全部用途。
