@@ -151,8 +151,8 @@ sentinel与redis instance之间,
 
 - 再说通过pc进行的,
 
-    - master 或者slave role的sentinelRedisInstance的pc连接(这个连接就是从
-    当前sentinel instance连接到远程的master 或者slave instance)创建之后，
+    - master或者slave role的sentinelRedisInstance的pc连接(这个连接就是从
+    当前sentinel instance连接到remote master或者slave instance)创建之后，
     不可忽略的一个重要操作就是SUBSCRIBE SENTINEL_HELLO_CHANNEL这个频道。
 
         ```
@@ -163,6 +163,12 @@ sentinel与redis instance之间,
         1758                 sentinelReceiveHelloMessages, NULL, "SUBSCRIBE %s",
         1759                     SENTINEL_HELLO_CHANNEL);
         ```
+
+    **值得注意的是，可以看到sentinel与sentinel之间并不会直接订阅对方，但是后续会提到的，
+    我们配合sentinel的方案中，我们的listener是直接订阅了所有的sentinel instance的，
+    即sentinel instance的pubsub的消息来源渠道并不对外开放。怎么做到不开放后续会解释。而是通过
+    sentinelEvent方法向外部广播sentinel内部正在发生什么的时候内部使用。**
+    关于sentinelEvent方法后续也会详细介绍.
 
 再说sentinel与sentinel instance之间,
 
@@ -248,14 +254,24 @@ SENTINEL_PUBLISH_PERIOD默认为2s.ri->last_pub_time后续马上会提到。
 所以这些信息都是当前sentinel的主观视角的信息而已，保证这些信息的时效性不在此处.
 这些master config信息尽可能及时被更新的逻辑后续会提到。
 
-- hello msg是从本地的master slave sentinel 三种role的sentinelRedisInstance发起的，也就是说其实slave sentinel role的sentinelRedisInstance发起的
-hello msg其实是同对应的master role的sentinelRedisInstance的hello msg是重复的。但是注意渠道不一样，每个sentinelRedisInstance向外广播的渠道是这个
-sentinelRedisInstance所指向的远程redis master slave instance或者sentinel instance的。通过当前sentinel instance于这些instance之间的cc连接传递出去。
+- hello msg是从本地的master slave sentinel三种role的sentinelRedisInstance发起的，
+也就是说其实slave sentinel role的sentinelRedisInstance发起的
+hello msg其实是同对应的master role的sentinelRedisInstance的hello msg是重复的。
+但是注意cc link这个渠道不一样，每个sentinelRedisInstance向外广播的渠道是当前sentinel与这个
+sentinelRedisInstance所指向的remote master或slave redis instance或者sentinel instance的之间建立的cc连接。
 暂且先不说这些instance对hello msg的处理有何不同，后续会马上提到。
 
-通过publish cmd不断向外广播，这个广播既发给了master slave redis instance(很好理解，通过这些redis instance的pubsub广播渠道曲线到达其他sentinel instance，
-因为正如上面提到的这一组sentinel中每个sentinel instance都SUBSCRIBE了所有这一组sentinel管辖下的master和slave instance的SENTINEL_HELLO_CHANNEL channel。
-同时还发给了sentinel instance，这一点很蹊跷，后续会讲到sentinel instance对通过publish cmd发送hello msg给他的处理方式。
+hello msg通过publish cmd不断向外send广播出去，
+
+- 这个广播既发给了master和slave redis instance,
+很好理解，通过这些redis instance的pubsub广播渠道曲线到达other sentinel instance，
+因为正如上面提到的这一组sentinel中每个sentinel instance都SUBSCRIBE了所有这一组sentinel管辖下
+的master和slave instance的SENTINEL_HELLO_CHANNEL channel。
+
+- 同时还直接发给了sentinel instance，
+这一点很蹊跷，后续会讲到sentinel instance对通过publish cmd发送hello msg给他的处理方式。
+
+然后我们详细看一下sentinelSendHello的具体逻辑,
 
 ```
 /* src/sentinel.c */
@@ -314,61 +330,73 @@ sentinelRedisInstance所指向的远程redis master slave instance或者sentinel
 
 - 可以看到如果sentinelRedisInstance处于SRI_DISCONNECTED，则会直接返回REDIS_ERR
 
-- hello msg中sentinel_ip, sentinel_port信息是可以单独从配置文件指定的，announce_host,announce_port。
-好处是在docker container net 为bridge mode下，sentinel hello msg机制也可以工作。
+- hello msg中sentinel_ip, sentinel_port信息是可以单独从配置文件指定的即announce_host,announce_port。
+好处是在docker container的net为bridge mode下，sentinel hello msg机制也可以工作。
 
-- master config是从(ri->flags & SRI_MASTER) ? ri : ri->master；这样的sentinelRedisInstance中通过sentinelGetCurrentMasterAddress获取的。
-  这样一种获取master config的方式值得说一下，
+- master_xx这些config是从(ri->flags & SRI_MASTER) ? ri : ri->master；这样的sentinelRedisInstance中
+通过sentinelGetCurrentMasterAddress获取的。
 
-    - sentinelGetCurrentMasterAddress
+    sentinelgetcurrentmasteraddress这样一种获取master config的方式值得说一下，
 
-        ```
-        /* src/sentinel.c */
-        1297 /* Return the current master address, that is, its address or the address
-        1298  * of the promoted slave if already operational. */
-        1299 sentinelAddr *sentinelGetCurrentMasterAddress(sentinelRedisInstance *master) {
-        1300     /* If we are failing over the master, and the state is already
-        1301      * SENTINEL_FAILOVER_STATE_RECONF_SLAVES or greater, it means that we
-        1302      * already have the new configuration epoch in the master, and the
-        1303      * slave acknowledged the configuration switch. Advertise the new
-        1304      * address. */
-        1305     if ((master->flags & SRI_FAILOVER_IN_PROGRESS) &&
-        1306         master->promoted_slave &&
-        1307         master->failover_state >= SENTINEL_FAILOVER_STATE_RECONF_SLAVES)
-        1308     {
-        1309         return master->promoted_slave->addr;
-        1310     } else {
-        1311         return master->addr;
-        1312     }
-        1313 }
-        ```
+    ```
+    /* src/sentinel.c */
+    1297 /* Return the current master address, that is, its address or the address
+    1298  * of the promoted slave if already operational. */
+    1299 sentinelAddr *sentinelGetCurrentMasterAddress(sentinelRedisInstance *master) {
+    1300     /* If we are failing over the master, and the state is already
+    1301      * SENTINEL_FAILOVER_STATE_RECONF_SLAVES or greater, it means that we
+    1302      * already have the new configuration epoch in the master, and the
+    1303      * slave acknowledged the configuration switch. Advertise the new
+    1304      * address. */
+    1305     if ((master->flags & SRI_FAILOVER_IN_PROGRESS) &&
+    1306         master->promoted_slave &&
+    1307         master->failover_state >= SENTINEL_FAILOVER_STATE_RECONF_SLAVES)
+    1308     {
+    1309         return master->promoted_slave->addr;
+    1310     } else {
+    1311         return master->addr;
+    1312     }
+    1313 }
+    ```
 
-        可以看到这个master sentinelRedisInstance的flags如果处于sentinelRedisInstance状态，并且master->promoted_slave为真，
-        并且master->failover_state >= SENTINEL_FAILOVER_STATE_RECONF_SLAVES, 此时则表示该promoted_slave所对应的redis instance
-        已经响应了slave of no one的命令摒弃了与old master之间的sync关系，此时当前sentinel就开始广播这一虽然是阶段性是里程碑性质的成果，
-        虽然此时failover还在继续中，但是最重要的一步已经完成，再提一下sentinelAbortFailover进行的前提条件，
-        
-        ```
-        /* src/sentinel.c */
-        3900 void sentinelAbortFailover(sentinelRedisInstance *ri) {
-        3901     redisAssert(ri->flags & SRI_FAILOVER_IN_PROGRESS);
-        3902     redisAssert(ri->failover_state <= SENTINEL_FAILOVER_STATE_WAIT_PROMOTION);
-        ```
-        
-        **可以看到sentinelAbortFailover会redisAssert(ri->failover_state <= SENTINEL_FAILOVER_STATE_WAIT_PROMOTION),而
-        SENTINEL_FAILOVER_STATE_WAIT_PROMOTION刚好是SENTINEL_FAILOVER_STATE_RECONF_SLAVES这个状态的前一个状态，到达
-        SENTINEL_FAILOVER_STATE_RECONF_SLAVES则表示不能再abort failover,进入sentinelFailoverReconfNextSlave之后该次failover无论
-        如果都必须继续完成，相关逻辑在sentinelFailoverDetectEnd，即使输出了+failover-end-for-timeout messge，该次failover也一定
-        会完成,之前将failover流程的时候已经提到过了**
+    可以看到,
 
-        **可以看到此处就将failover 成果第一时间广播出去，对提高sentinel 方案的容错性有很大的好处，
-        因为hello msg中master config epoch高的config一定会获得其他sentinel的直接认同，不需要任何前置确认信息,
-        只要有一个sentinel instance将这份高epoch配置持久化下来，这份配置就会强制生效了。**
-        
-可以看到sentinel给PUBLISH async cmd注册了sentinelPublishReplyCallback函数。
+    - 这个master sentinelRedisInstance的flags如果处于SRI_FAILOVER_IN_PROGRESS状态
+
+    - 并且master->promoted_slave为真，
+
+    - 并且master->failover_state >= SENTINEL_FAILOVER_STATE_RECONF_SLAVES, 
+
+    **则表示该promoted_slave所对应的redis instance已经响应了slave of no one的命令摒弃了与old master之间的sync关系,
+    此时当前sentinel就开始广播这一虽然是阶段性但确是里程碑性质的成果，
+    虽然此时failover还在继续中，但是最重要的一步已经完成.**
+    再重提一下sentinelAbortFailover进行的前提条件，
+
+    ```
+    /* src/sentinel.c */
+    3900 void sentinelAbortFailover(sentinelRedisInstance *ri) {
+    3901     redisAssert(ri->flags & SRI_FAILOVER_IN_PROGRESS);
+    3902     redisAssert(ri->failover_state <= SENTINEL_FAILOVER_STATE_WAIT_PROMOTION);
+    ```
+
+    **可以看到sentinelAbortFailover会redisAssert(ri->failover_state <= SENTINEL_FAILOVER_STATE_WAIT_PROMOTION),而
+    SENTINEL_FAILOVER_STATE_WAIT_PROMOTION刚好是SENTINEL_FAILOVER_STATE_RECONF_SLAVES这个状态的前一个状态，到达
+    SENTINEL_FAILOVER_STATE_RECONF_SLAVES则表示不能再abort failover,进入sentinelFailoverReconfNextSlave之后该次failover无论
+    如何都必须继续完成，所谓必须完成的相关逻辑在sentinelFailoverDetectEnd，即使输出了+failover-end-for-timeout messge，
+    该次failover也一定会走+failover-end的逻辑完成,之前将failover流程的时候已经提到过了**
+
+    **可以看到此处就将failover成果通过upgrade config的方式第一时间广播出去，对提高sentinel方案的容错性有很大的好处，
+    因为hello msg中master config epoch高的upgrade config一定会获得other sentinel的直接认同
+    (除了比较config_epoch之外不需要任何前置确认信息),
+    只要有一个sentinel instance将这份高epoch的config持久化下来，这份config就会强制生效了。除非后续有新的config来覆盖它，
+    否则redis instance之间一定会达到这个config所定义的拓扑状态，值得注意的是，
+    config_epoch的的作用范围以及config_epoch每次变更是局限在一个master的范围内的.**
+
+继续来看sentinel给send hello msg这一PUBLISH async cmd注册的sentinelPublishReplyCallback函数。
 同样返回REDIS_ERR在sentinelSendHello表示async cmd根本就没有queued correctly。
-可以注意到的是，在sentinelSendHello里并没有直接更新ri->last_pub_time，更新是在sentinelPublishReplyCallback函数里完成的,
-如果reply不为error的情况下才会更新ri->last_pub_time,具体如下。
+可以注意到的是，在sentinelSendHello里并没有直接更新ri->last_pub_time，
+更新是在sentinelPublishReplyCallback函数里完成的,
+如果reply不为error的情况下才会更新ri->last_pub_time,具体如下,
 
 ```
 /* src/sentinel.c */
@@ -390,11 +418,16 @@ sentinelRedisInstance所指向的远程redis master slave instance或者sentinel
 2114 }
 ```
 
-关于ri->last_pub_time，这个参数详细提一下，限制作用之前已经提过了，就是用来控制publish hello message的频率。
-除了上面提到的通过now - ri->last_pub_time) > SENTINEL_PUBLISH_PERIOD这个判断的限制作用外，就只能通过变更ri->last_pub_time
-来控制该频率，因为除了上面提到的那个地方调用sentinelSendHello外，sentinelSendHello没有其他入口。
-但是什么情况下更新ri->last_pub_time,上面讲到的只是正常情况下的一种情况,下面还有一种情况下，为了尽快publish变更出去，
-会将当前的ri->last_pub_time减掉SENTINEL_PUBLISH_PERIOD+1这样一个时间间隔，那么下次循环就会立即执行此publish操作。
+关于ri->last_pub_time，这个参数详细提一下，其限制作用之前已经提过了，
+通过now - ri->last_pub_time) > SENTINEL_PUBLISH_PERIOD这个判断来限制调用sentinelSendHello的频率,
+而且sentinelSendHello有且仅有那样一个入口。
+所以要改变sentinelSendHello的行为，则就只能通过变更ri->last_pub_time来控制。
+
+但是什么情况下更新ri->last_pub_time,上面讲到的只是正常情况下的一种情况,
+下面还有一种情况下，为了尽快publish变更出去，
+会将当前的ri->last_pub_time减掉SENTINEL_PUBLISH_PERIOD+1这样一个时间间隔，那么
+下次循环就会立即执行此publish操作。
+
 具体细节如下，
 
 ```
@@ -466,8 +499,9 @@ sentinelForceHelloUpdateForMaster的调用时机如下,
 之后立即执行sentinelForceHelloUpdateForMaster，提前下一次send hello msg到下个timer循环，尽快将新的config广播出去。
 使得其他sentinel尽快更新自己的config为该upgrade之后的config.
 
-至此关于当前sentinel instance send hello msg已经讲完了，但是sentinel instance收到hello msg怎么处理还没有讲，
-接下来讲一下，对hello msg的响应。
+至此关于当前sentinel instance send hello msg以及send hello msg callback已经讲完了.
+
+但是other sentinel instance怎么收到hello msg以及怎么处理hello msg还没有讲，接下来讲一下，对hello msg的响应,
 
 ```
 /* src/sentinel.c */
@@ -481,94 +515,94 @@ sentinelForceHelloUpdateForMaster的调用时机如下,
 - 在SUBSCRIBE master,slave的redis instance的时候,给该channel的pubsub消息注册了一个回调函数sentinelReceiveHelloMessages。
 这就是通过pubsub渠道间接获取其他sentinel的hello msg并处理的机制。
 
-```
-/* src/sentinel.c */
-2209 /* This is our Pub/Sub callback for the Hello channel. It's useful in order
-2210  * to discover other sentinels attached at the same master. */
-2211 void sentinelReceiveHelloMessages(redisAsyncContext *c, void *reply, void *privdata) {
-2212     sentinelRedisInstance *ri = c->data;
-2213     redisReply *r;
-2214     REDIS_NOTUSED(privdata);
-2215
-2216     if (!reply || !ri) return;
-2217     r = reply;
-2218
-2219     /* Update the last activity in the pubsub channel. Note that since we
-2220      * receive our messages as well this timestamp can be used to detect
-2221      * if the link is probably disconnected even if it seems otherwise. */
-2222     ri->pc_last_activity = mstime();
-2223
-2224     /* Sanity check in the reply we expect, so that the code that follows
-2225      * can avoid to check for details. */
-2226     if (r->type != REDIS_REPLY_ARRAY ||
-2227         r->elements != 3 ||
-2228         r->element[0]->type != REDIS_REPLY_STRING ||
-2229         r->element[1]->type != REDIS_REPLY_STRING ||
-2230         r->element[2]->type != REDIS_REPLY_STRING ||
-2231         strcmp(r->element[0]->str,"message") != 0) return;
-2232
-2233     /* We are not interested in meeting ourselves */
-2234     if (strstr(r->element[2]->str,server.runid) != NULL) return;
-2235
-2236     sentinelProcessHelloMessage(r->element[2]->str, r->element[2]->len);
-2237 }
-```
+    ```
+    /* src/sentinel.c */
+    2209 /* This is our Pub/Sub callback for the Hello channel. It's useful in order
+    2210  * to discover other sentinels attached at the same master. */
+    2211 void sentinelReceiveHelloMessages(redisAsyncContext *c, void *reply, void *privdata) {
+    2212     sentinelRedisInstance *ri = c->data;
+    2213     redisReply *r;
+    2214     REDIS_NOTUSED(privdata);
+    2215
+    2216     if (!reply || !ri) return;
+    2217     r = reply;
+    2218
+    2219     /* Update the last activity in the pubsub channel. Note that since we
+    2220      * receive our messages as well this timestamp can be used to detect
+    2221      * if the link is probably disconnected even if it seems otherwise. */
+    2222     ri->pc_last_activity = mstime();
+    2223
+    2224     /* Sanity check in the reply we expect, so that the code that follows
+    2225      * can avoid to check for details. */
+    2226     if (r->type != REDIS_REPLY_ARRAY ||
+    2227         r->elements != 3 ||
+    2228         r->element[0]->type != REDIS_REPLY_STRING ||
+    2229         r->element[1]->type != REDIS_REPLY_STRING ||
+    2230         r->element[2]->type != REDIS_REPLY_STRING ||
+    2231         strcmp(r->element[0]->str,"message") != 0) return;
+    2232
+    2233     /* We are not interested in meeting ourselves */
+    2234     if (strstr(r->element[2]->str,server.runid) != NULL) return;
+    2235
+    2236     sentinelProcessHelloMessage(r->element[2]->str, r->element[2]->len);
+    2237 }
+    ```
 
     有几个逻辑，
 
-    - sentinelReceiveHelloMessages在检查reply合法性之前，即只要有reply，则更新ri->pc_last_activity,
-      ri->pc_last_activity主要是用于判断pc连接是否需要reconnect的。如果距离上次更新ri->pc_last_activity
-      超过3倍SENTINEL_PUBLISH_PERIOD则需要重连。这也就是pc_last_activity的全部作用。
+        - sentinelReceiveHelloMessages在检查reply合法性之前，即只要有reply，则更新ri->pc_last_activity,
+          ri->pc_last_activity主要是用于判断pc连接是否需要reconnect的。如果距离上次更新ri->pc_last_activity
+          超过3倍SENTINEL_PUBLISH_PERIOD则需要重连。这也就是pc_last_activity的全部作用。
 
-    - 如果该hello msg是当前sentinel发出去的，则也忽略。
+        - 如果该hello msg是当前sentinel发出去的，则也忽略。
 
-    - 最后处理hello msg的函数是sentinelProcessHelloMessage，后续会详细解释。
+        - 最后处理hello msg的函数是sentinelProcessHelloMessage，后续会详细解释。
 
-- 那么直接发送给sentinel instance的hello msg消息，是怎么处理的呢?
+- 那么直接发送给other sentinel instance的hello msg消息，other sentinel是怎么处理的呢?
 
-谈到这个问题，不得不说一下sentinelcmds的相关机制。
+    谈到这个问题，不得不说一下sentinelcmds的相关机制。
 
-```
-/* src/sentinel.c */
-385 void sentinelCommand(redisClient *c);
-386 void sentinelInfoCommand(redisClient *c);
-387 void sentinelSetCommand(redisClient *c);
-388 void sentinelPublishCommand(redisClient *c);
-389 void sentinelRoleCommand(redisClient *c);
-390
-391 struct redisCommand sentinelcmds[] = {
-392     {"ping",pingCommand,1,"",0,NULL,0,0,0,0,0},
-393     {"sentinel",sentinelCommand,-2,"",0,NULL,0,0,0,0,0},
-394     {"subscribe",subscribeCommand,-2,"",0,NULL,0,0,0,0,0},
-395     {"unsubscribe",unsubscribeCommand,-1,"",0,NULL,0,0,0,0,0},
-396     {"psubscribe",psubscribeCommand,-2,"",0,NULL,0,0,0,0,0},
-397     {"punsubscribe",punsubscribeCommand,-1,"",0,NULL,0,0,0,0,0},
-398     {"publish",sentinelPublishCommand,3,"",0,NULL,0,0,0,0,0},
-399     {"info",sentinelInfoCommand,-1,"",0,NULL,0,0,0,0,0},
-400     {"role",sentinelRoleCommand,1,"l",0,NULL,0,0,0,0,0},
-401     {"shutdown",shutdownCommand,-1,"",0,NULL,0,0,0,0,0}
-402 };
+    ```
+    /* src/sentinel.c */
+    385 void sentinelCommand(redisClient *c);
+    386 void sentinelInfoCommand(redisClient *c);
+    387 void sentinelSetCommand(redisClient *c);
+    388 void sentinelPublishCommand(redisClient *c);
+    389 void sentinelRoleCommand(redisClient *c);
+    390
+    391 struct redisCommand sentinelcmds[] = {
+    392     {"ping",pingCommand,1,"",0,NULL,0,0,0,0,0},
+    393     {"sentinel",sentinelCommand,-2,"",0,NULL,0,0,0,0,0},
+    394     {"subscribe",subscribeCommand,-2,"",0,NULL,0,0,0,0,0},
+    395     {"unsubscribe",unsubscribeCommand,-1,"",0,NULL,0,0,0,0,0},
+    396     {"psubscribe",psubscribeCommand,-2,"",0,NULL,0,0,0,0,0},
+    397     {"punsubscribe",punsubscribeCommand,-1,"",0,NULL,0,0,0,0,0},
+    398     {"publish",sentinelPublishCommand,3,"",0,NULL,0,0,0,0,0},
+    399     {"info",sentinelInfoCommand,-1,"",0,NULL,0,0,0,0,0},
+    400     {"role",sentinelRoleCommand,1,"l",0,NULL,0,0,0,0,0},
+    401     {"shutdown",shutdownCommand,-1,"",0,NULL,0,0,0,0,0}
+    402 };
 
-410 /* Perform the Sentinel mode initialization. */
-411 void initSentinel(void) {
-412     unsigned int j;
-413
-414     /* Remove usual Redis commands from the command table, then just add
-415      * the SENTINEL command. */
-416     dictEmpty(server.commands,NULL);
-417     for (j = 0; j < sizeof(sentinelcmds)/sizeof(sentinelcmds[0]); j++) {
-418         int retval;
-419         struct redisCommand *cmd = sentinelcmds+j;
-420
-421         retval = dictAdd(server.commands, sdsnew(cmd->name), cmd);
-422         redisAssert(retval == DICT_OK);
-423     }
-```
+    410 /* Perform the Sentinel mode initialization. */
+    411 void initSentinel(void) {
+    412     unsigned int j;
+    413
+    414     /* Remove usual Redis commands from the command table, then just add
+    415      * the SENTINEL command. */
+    416     dictEmpty(server.commands,NULL);
+    417     for (j = 0; j < sizeof(sentinelcmds)/sizeof(sentinelcmds[0]); j++) {
+    418         int retval;
+    419         struct redisCommand *cmd = sentinelcmds+j;
+    420
+    421         retval = dictAdd(server.commands, sdsnew(cmd->name), cmd);
+    422         redisAssert(retval == DICT_OK);
+    423     }
+    ```
 
-可以看到initSentinel这个sentinel相对redis server特有的初始化函数，首先将
-server.commands这个dict清空，然后重新加载了一批在sentinelcmds list里定义的响应命令的list。
-也就是说sentinel instance摒弃了redis server原有的所有cmd，sentinel instance单独只响应
-sentinelcmds list中命令，这个sentinelcmds list又分三类，
+    可以看到initSentinel这个sentinel相对redis server特有的初始化函数，首先将
+    server.commands这个dict清空，然后重新加载了一批在sentinelcmds list里定义的响应命令的list。
+    也就是说sentinel instance摒弃了redis server原有的所有cmd，sentinel instance单独只响应
+    sentinelcmds list中命令，这个sentinelcmds list又分三类，
 
     - 原封不动加载的redis server提供的已有命令,
       pingCommand,subscribeCommand,unsubscribeCommand,psubscribeCommand,punsubscribeCommand,shutdownCommand
@@ -581,37 +615,38 @@ sentinelcmds list中命令，这个sentinelcmds list又分三类，
 
     - 被sentinel override的命令，
       sentinelPublishCommand, sentinelInfoCommand,sentinelRoleCommand
-      
-此处介绍一下被override的sentinelPublishCommand。
 
-```
-/* src/sentinel.c */
-3027 /* Our fake PUBLISH command: it is actually useful only to receive hello messages
-3028  * from the other sentinel instances, and publishing to a channel other than
-3029  * SENTINEL_HELLO_CHANNEL is forbidden.
-3030  *
-3031  * Because we have a Sentinel PUBLISH, the code to send hello messages is the same
-3032  * for all the three kind of instances: masters, slaves, sentinels. */
-3033 void sentinelPublishCommand(redisClient *c) {
-3034     if (strcmp(c->argv[1]->ptr,SENTINEL_HELLO_CHANNEL)) {
-3035         addReplyError(c, "Only HELLO messages are accepted by Sentinel instances.");
-3036         return;
-3037     }
-3038     sentinelProcessHelloMessage(c->argv[2]->ptr,sdslen(c->argv[2]->ptr));
-3039     addReplyLongLong(c,1);
-3040 }
-```
+    此处介绍一下被override的sentinelPublishCommand。
 
-有几个值得注意的地方，
+    ```
+    /* src/sentinel.c */
+    3027 /* Our fake PUBLISH command: it is actually useful only to receive hello messages
+    3028  * from the other sentinel instances, and publishing to a channel other than
+    3029  * SENTINEL_HELLO_CHANNEL is forbidden.
+    3030  *
+    3031  * Because we have a Sentinel PUBLISH, the code to send hello messages is the same
+    3032  * for all the three kind of instances: masters, slaves, sentinels. */
+    3033 void sentinelPublishCommand(redisClient *c) {
+    3034     if (strcmp(c->argv[1]->ptr,SENTINEL_HELLO_CHANNEL)) {
+    3035         addReplyError(c, "Only HELLO messages are accepted by Sentinel instances.");
+    3036         return;
+    3037     }
+    3038     sentinelProcessHelloMessage(c->argv[2]->ptr,sdslen(c->argv[2]->ptr));
+    3039     addReplyLongLong(c,1);
+    3040 }
+    ```
 
-    - 这个publish命令响应函数仅仅用来响应其他sentinel instance发送的hello msg，对于除SENTINEL_HELLO_CHANNEL
-      这个channel之外的msg, 返回addReplyError。除此之外调用sentinelProcessHelloMessage这个真正处理msg的逻辑，
-      sentinelProcessHelloMessage这个函数存在的好处是和正常的hello msg处理流程做到了代码共用。
+    有几个值得注意的地方，
 
-    - 通过override的做法，做到了在send hello msg给master slave redis instance以及sentinel instance的时候共用
-      一个逻辑。
+        - 这个publish命令响应函数仅仅用来响应其他sentinel instance发送的hello msg，对于除SENTINEL_HELLO_CHANNEL
+          这个channel之外的msg, 返回addReplyError。除此之外调用sentinelProcessHelloMessage这个真正处理msg的逻辑，
+          sentinelProcessHelloMessage这个函数存在的好处是和常归的hello msg处理流程做到了代码共用。
 
-最后关于hello msg来看一下，sentinelProcessHelloMessage的逻辑。
+        - 通过override的做法，做到了在send hello msg给master slave redis instance以及sentinel instance的时候共用
+          一个逻辑。
+
+所以可以看到上面就是sentinel instance send hello msg以及remote instance对其的响应的两种不同的流程。
+最后关于hello msg来看一下，两种不同的流程处理hello msg时共用的sentinelProcessHelloMessage的逻辑。
 
 ```
 /* src/sentinel.c */
@@ -668,26 +703,30 @@ sentinelcmds list中命令，这个sentinelcmds list又分三类，
 
 - 可以看到先行判断收到的hello msg以逗号分隔后是否为8部分。如果不是，则丢弃。
 
-- 如果用hello msg中的master_name通过sentinelGetMasterByName去sentinel.masters管辖下的所有master信息中查找是否存在该master_name，
-如果找不到，即未知的master，则会被直接忽略,此处也就是master信息不会通过hello msg的广播机制共享给其他sentinel的原因。
+- 如果用hello msg中的master_name通过sentinelGetMasterByName去sentinel.masters管辖下
+的所有master信息中查找是否存在该master_name，如果找不到，即未知的master，则会被直接忽略,
+此处也就是master信息不会通过hello msg的广播机制共享给其他sentinel的原因。
 
-- 如果能够在sentinel.masters找到该master，则先行从master sentinelRedisInstance struct的master->sentinels中删除重复的sentinel sentinelRedisInstance.
-并输出了-dup-sentinel msg。然后在重新创建sentinel sentinelRedisInstance并挂载在master下。并输出+sentinel msg。由于自动发现的sentinel的创建
-sentinel sentinelRedisInstance的runid就是在此处填充的，没有其他的机会填充。
+- 如果能够在sentinel.masters找到该master，则先行从master sentinelRedisInstance struct的
+master->sentinels中删除重复的sentinel sentinelRedisInstance(如果相应的sentinel sentinelRedisInstance存在的话).
+并输出了-dup-sentinel msg。然后在重新创建sentinel sentinelRedisInstance并挂载在master下。并输出+sentinel msg。
+由于自动发现的sentinel的创建sentinel sentinelRedisInstance的runid就是在此处填充的，没有其他的机会填充。
 
-- 最后可以看到此处更新了sentinel sentinelRedisInstance的last_hello_time属性。last_hello_time属性目前仅用于addReplySentinelRedisInstance这个
-被用于各种info逻辑中的函数。记录了该sentinel sentinelRedisInstance所对应的远程sentinel instance的上一条hello msg是什么时候到达的。
+- 最后可以看到此处更新了sentinel sentinelRedisInstance的last_hello_time属性。last_hello_time属性
+目前仅用于addReplySentinelRedisInstance这个被用于各种"sentinel masters"这类的info逻辑中的函数里。
+记录了该sentinel sentinelRedisInstance所对应的远程sentinel instance的上一条hello msg是什么时候到达的。
 
-- 关于sentinelResetMaster的部分以及epoch变更的部分，后续会详细解释。
+关于sentinelResetMaster的部分以及epoch变更的部分，后续会详细解释。
 
 自此，hello msg的所有相关流程介绍完成。
 
 ### **各个epoch的细节(包含vote的细节)**
 ---------------------------------------
 
-介绍一个epoch相关的细节，epoch其实是几种，epoch只是一个统称，epoch的作用关乎vote，关乎upgrade config的传播，所以算是一个比较复杂的逻辑。
+介绍一个epoch相关的细节，epoch其实是几种，epoch只是一个统称，epoch的作用
+关乎vote，关乎upgrade config的传播，所以算是一个比较复杂的逻辑。
 
-分别在以下数据结构里。
+分别在以下数据结构里,
 
 ```
 /* src/sentinel.c */
@@ -705,54 +744,56 @@ sentinel sentinelRedisInstance的runid就是在此处填充的，没有其他的
 
 这四个epoch之间以及他们与vote之间有着千丝万缕的联系，分开看每一个都不完整。同时顺带着会讲leader字段以及vote的逻辑。
 
-分阶段讲吧。
+分阶段讲吧,
 
-- 初始化
+- **初始化**
 
-```
-/* src/sentinel.c */
-410 /* Perform the Sentinel mode initialization. */
-411 void initSentinel(void) {
-425     /* Initialize various data structures. */
-426     sentinel.current_epoch = 0;
+    ```
+    /* src/sentinel.c */
+    410 /* Perform the Sentinel mode initialization. */
+    411 void initSentinel(void) {
+    425     /* Initialize various data structures. */
+    426     sentinel.current_epoch = 0;
 
-896 sentinelRedisInstance *createSentinelRedisInstance(char *name, int flags, char *hostname, int port, int quorum, sentinelRedisInstance *master) {
-936     ri->config_epoch = 0;
-973     /* Failover state. */
-974     ri->leader = NULL;
-975     ri->leader_epoch = 0;
-976     ri->failover_epoch = 0;
-```
-可以明显看出来的是，current_epoch是在global sentinel struct上的一个属性，没有什么歧义。
-> /* sentinel current-epoch is a global state valid for all the masters. */
+    896 sentinelRedisInstance *createSentinelRedisInstance(char *name, int flags, char *hostname, int port, int quorum, sentinelRedisInstance *master) {
+    936     ri->config_epoch = 0;
+    973     /* Failover state. */
+    974     ri->leader = NULL;
+    975     ri->leader_epoch = 0;
+    976     ri->failover_epoch = 0;
+    ```
 
-而对于config_epoch，leader_epoch,failover_epoch来说则，此时则比较不确定，具体是作用于什么role的sentinelRedisInstance上。
+    可以明显看出来的是，current_epoch是在global sentinel struct上的一个属性，没有什么歧义。
 
-- sentinelHandleConfiguration里的一段逻辑关于epoch可以用来预热
+    > /* sentinel current-epoch is a global state valid for all the masters. */
 
-```
-/* src/sentinel.c */
-1391     } else if (!strcasecmp(argv[0],"current-epoch") && argc == 2) {
-1392         /* current-epoch <epoch> */
-1393         unsigned long long current_epoch = strtoull(argv[1],NULL,10);
-1394         if (current_epoch > sentinel.current_epoch)
-1395             sentinel.current_epoch = current_epoch;
-1396     } else if (!strcasecmp(argv[0],"config-epoch") && argc == 3) {
-1397         /* config-epoch <name> <epoch> */
-1398         ri = sentinelGetMasterByName(argv[1]);
-1399         if (!ri) return "No such master with specified name.";
-1400         ri->config_epoch = strtoull(argv[2],NULL,10);
-1401         /* The following update of current_epoch is not really useful as
-1402          * now the current epoch is persisted on the config file, but
-1403          * we leave this check here for redundancy. */
-1404         if (ri->config_epoch > sentinel.current_epoch)
-1405             sentinel.current_epoch = ri->config_epoch;
-1406     } else if (!strcasecmp(argv[0],"leader-epoch") && argc == 3) {
-1407         /* leader-epoch <name> <epoch> */
-1408         ri = sentinelGetMasterByName(argv[1]);
-1409         if (!ri) return "No such master with specified name.";
-1410         ri->leader_epoch = strtoull(argv[2],NULL,10);
-```
+    而对于config_epoch,failover_epoch,leader_epoch来说，暂时则比较不确定，具体是作用于什么role的sentinelRedisInstance上。
+
+- **sentinelHandleConfiguration里的一段逻辑关于epoch可以用来预热**
+
+    ```
+    /* src/sentinel.c */
+    1391     } else if (!strcasecmp(argv[0],"current-epoch") && argc == 2) {
+    1392         /* current-epoch <epoch> */
+    1393         unsigned long long current_epoch = strtoull(argv[1],NULL,10);
+    1394         if (current_epoch > sentinel.current_epoch)
+    1395             sentinel.current_epoch = current_epoch;
+    1396     } else if (!strcasecmp(argv[0],"config-epoch") && argc == 3) {
+    1397         /* config-epoch <name> <epoch> */
+    1398         ri = sentinelGetMasterByName(argv[1]);
+    1399         if (!ri) return "No such master with specified name.";
+    1400         ri->config_epoch = strtoull(argv[2],NULL,10);
+    1401         /* The following update of current_epoch is not really useful as
+    1402          * now the current epoch is persisted on the config file, but
+    1403          * we leave this check here for redundancy. */
+    1404         if (ri->config_epoch > sentinel.current_epoch)
+    1405             sentinel.current_epoch = ri->config_epoch;
+    1406     } else if (!strcasecmp(argv[0],"leader-epoch") && argc == 3) {
+    1407         /* leader-epoch <name> <epoch> */
+    1408         ri = sentinelGetMasterByName(argv[1]);
+    1409         if (!ri) return "No such master with specified name.";
+    1410         ri->leader_epoch = strtoull(argv[2],NULL,10);
+    ```
 
     - 关于配置/* current-epoch <epoch> */，如果大于sentinel.current_epoch,则更新sentinel.current_epoch
 
@@ -762,168 +803,176 @@ sentinel sentinelRedisInstance的runid就是在此处填充的，没有其他的
     - 对于/* leader-epoch <name> <epoch> */同样也是先去找到master并且将该master sentinelRedisInstance的config_epoch
       置为配置数。
 
-- 从addReplySentinelRedisInstance捕风捉影
+- **从addReplySentinelRedisInstance捕风捉影**
 
-```
-/* src/sentinel.c */
-2410 /* Redis instance to Redis protocol representation. */
-2411 void addReplySentinelRedisInstance(redisClient *c, sentinelRedisInstance *ri) {
-2509     /* Only masters */
-2510     if (ri->flags & SRI_MASTER) {
-2511         addReplyBulkCString(c,"config-epoch");
-2512         addReplyBulkLongLong(c,ri->config_epoch);
-2513         fields++;
+    ```
+    /* src/sentinel.c */
+    2410 /* Redis instance to Redis protocol representation. */
+    2411 void addReplySentinelRedisInstance(redisClient *c, sentinelRedisInstance *ri) {
+    2509     /* Only masters */
+    2510     if (ri->flags & SRI_MASTER) {
+    2511         addReplyBulkCString(c,"config-epoch");
+    2512         addReplyBulkLongLong(c,ri->config_epoch);
+    2513         fields++;
 
-2578     /* Only sentinels */
-2579     if (ri->flags & SRI_SENTINEL) {
-2584         addReplyBulkCString(c,"voted-leader");
-2585         addReplyBulkCString(c,ri->leader ? ri->leader : "?");
-2586         fields++;
+    2578     /* Only sentinels */
+    2579     if (ri->flags & SRI_SENTINEL) {
+    2584         addReplyBulkCString(c,"voted-leader");
+    2585         addReplyBulkCString(c,ri->leader ? ri->leader : "?");
+    2586         fields++;
 
-2588         addReplyBulkCString(c,"voted-leader-epoch");
-2589         addReplyBulkLongLong(c,ri->leader_epoch);
-2590         fields++;
-```
+    2588         addReplyBulkCString(c,"voted-leader-epoch");
+    2589         addReplyBulkLongLong(c,ri->leader_epoch);
+    2590         fields++;
+    ```
 
-从这里来看，config_epoch只在master sentinelRedisInstance是有效的，leader以及leader_epoch只在sentinel sentinelRedisInstance上有效。
+    从这里来看，config_epoch只在master sentinelRedisInstance才会被通过info信息传达出去，
+    leader以及leader_epoch只在sentinel sentinelRedisInstance上会被传达出去。
 
-接下来，就是sentinelCheckObjectivelyDown会常态化的去从每个master sentinelRedisInstance的角度去检查挂载在master下的所有
-sentinel sentinelRedisInstance的SRI_MASTER_DOWN的数量，与quorum进行判断，并判定master sentinelRedisInstance是否应该置为SRI_O_DOWN状态。
-此处就是quorum用来进行大多数统计的一处逻辑。
+接下来，就是sentinelCheckObjectivelyDown会常态化的去从每个master sentinelRedisInstance的角度
+去检查挂载在master下的所有sentinel sentinelRedisInstance的SRI_MASTER_DOWN的数量，与quorum进行判断，
+并判定master sentinelRedisInstance是否应该置为SRI_O_DOWN状态。此处就是quorum用来进行大多数统计的第一处逻辑。
 
-- sentinelAskMasterStateToOtherSentinels常态化的ask
+- **sentinelAskMasterStateToOtherSentinels常态化的ask**
 
-```
-/* src/sentinel.c */
-3193 void sentinelAskMasterStateToOtherSentinels(sentinelRedisInstance *master, int flags) {
-3197     di = dictGetIterator(master->sentinels);
-3198     while((de = dictNext(di)) != NULL) {
-3200         mstime_t elapsed = mstime() - ri->last_master_down_reply_time;
-3204         /* If the master state from other sentinel is too old, we clear it. */
-3205         if (elapsed > SENTINEL_ASK_PERIOD*5) {
-3206             ri->flags &= ~SRI_MASTER_DOWN;
-3207             sdsfree(ri->leader);
-3208             ri->leader = NULL;
-3209         }
-3216         if ((master->flags & SRI_S_DOWN) == 0) continue;
-3222         /* Ask */
-3223         ll2string(port,sizeof(port),master->addr->port);
-3224         retval = redisAsyncCommand(ri->cc,
-3225                     sentinelReceiveIsMasterDownReply, NULL,
-3226                     "SENTINEL is-master-down-by-addr %s %s %llu %s",
-3227                     master->addr->ip, port,
-3228                     sentinel.current_epoch,
-3229                     (master->failover_state > SENTINEL_FAILOVER_STATE_NONE) ?
-3230                     server.runid : "*");
-```
+    ```
+    /* src/sentinel.c */
+    3193 void sentinelAskMasterStateToOtherSentinels(sentinelRedisInstance *master, int flags) {
+    3197     di = dictGetIterator(master->sentinels);
+    3198     while((de = dictNext(di)) != NULL) {
+    3199         sentinelRedisInstance *ri = dictGetVal(de);
+    3200         mstime_t elapsed = mstime() - ri->last_master_down_reply_time;
+    3204         /* If the master state from other sentinel is too old, we clear it. */
+    3205         if (elapsed > SENTINEL_ASK_PERIOD*5) {
+    3206             ri->flags &= ~SRI_MASTER_DOWN;
+    3207             sdsfree(ri->leader);
+    3208             ri->leader = NULL;
+    3209         }
+    3216         if ((master->flags & SRI_S_DOWN) == 0) continue;
+    3222         /* Ask */
+    3223         ll2string(port,sizeof(port),master->addr->port);
+    3224         retval = redisAsyncCommand(ri->cc,
+    3225                     sentinelReceiveIsMasterDownReply, NULL,
+    3226                     "SENTINEL is-master-down-by-addr %s %s %llu %s",
+    3227                     master->addr->ip, port,
+    3228                     sentinel.current_epoch,
+    3229                     (master->failover_state > SENTINEL_FAILOVER_STATE_NONE) ?
+    3230                     server.runid : "*");
+    ```
 
-可以看到在该sentinel sentinelRedisInstance的存储的远程sentinel instance对该master的评估SRI_MASTER_DOWN信息，
-如果距离上次更新到现在超过5倍SENTINEL_ASK_PERIOD时间,则直接摒弃掉该状态。如果该master sentinelRedisInstance处于
-SRI_S_DOWN，则暂时放弃从该master挂载下的所有sentinel sentinelRedisInstance去ask这一行为。
+    可以看到在该sentinel sentinelRedisInstance的存储的remote sentinel instance对该master的评估SRI_MASTER_DOWN信息，
+    如果距离上次更新到现在超过5倍SENTINEL_ASK_PERIOD时间,则直接摒弃掉该状态。如果该master sentinelRedisInstance处于
+    SRI_S_DOWN，则暂时放弃从该master挂载下的所有sentinel sentinelRedisInstance去ask这一行为。
 
-再来看一下，在此阶段，other sentinel instance对于is-master-down-by-addr的响应逻辑。
+    再来看一下，在此阶段，other sentinel instance对于is-master-down-by-addr的响应逻辑。
 
-```
-/* src/sentinel.c */
-2628 void sentinelCommand(redisClient *c) {
-2657     } else if (!strcasecmp(c->argv[1]->ptr,"is-master-down-by-addr")) {
-2658         /* SENTINEL IS-MASTER-DOWN-BY-ADDR <ip> <port> <current-epoch> <runid>*/
-2666         if (c->argc != 6) goto numargserr;
-2667         if (getLongFromObjectOrReply(c,c->argv[3],&port,NULL) != REDIS_OK ||
-2668             getLongLongFromObjectOrReply(c,c->argv[4],&req_epoch,NULL)
-2669                                                               != REDIS_OK)
-2670             return;
-2671         ri = getSentinelRedisInstanceByAddrAndRunID(sentinel.masters,
-2672             c->argv[2]->ptr,port,NULL);
-2673
-2674         /* It exists? Is actually a master? Is subjectively down? It's down.
-2675          * Note: if we are in tilt mode we always reply with "0". */
-2676         if (!sentinel.tilt && ri && (ri->flags & SRI_S_DOWN) &&
-2677                                     (ri->flags & SRI_MASTER))
-2678             isdown = 1;
-2679
-2680         /* Vote for the master (or fetch the previous vote) if the request
-2681          * includes a runid, otherwise the sender is not seeking for a vote. */
-2682         if (ri && ri->flags & SRI_MASTER && strcasecmp(c->argv[5]->ptr,"*")) {
-2683             leader = sentinelVoteLeader(ri,(uint64_t)req_epoch,
-2684                                             c->argv[5]->ptr,
-2685                                             &leader_epoch);
-2686         }
-2687
-2688         /* Reply with a three-elements multi-bulk reply:
-2689          * down state, leader, vote epoch. */
-2690         addReplyMultiBulkLen(c,3);
-2691         addReply(c, isdown ? shared.cone : shared.czero);
-2692         addReplyBulkCString(c, leader ? leader : "*");
-2693         addReplyLongLong(c, (long long)leader_epoch);
-```
+    ```
+    /* src/sentinel.c */
+    2628 void sentinelCommand(redisClient *c) {
+    2657     } else if (!strcasecmp(c->argv[1]->ptr,"is-master-down-by-addr")) {
+    2658         /* SENTINEL IS-MASTER-DOWN-BY-ADDR <ip> <port> <current-epoch> <runid>*/
+    2666         if (c->argc != 6) goto numargserr;
+    2667         if (getLongFromObjectOrReply(c,c->argv[3],&port,NULL) != REDIS_OK ||
+    2668             getLongLongFromObjectOrReply(c,c->argv[4],&req_epoch,NULL)
+    2669                                                               != REDIS_OK)
+    2670             return;
+    2671         ri = getSentinelRedisInstanceByAddrAndRunID(sentinel.masters,
+    2672             c->argv[2]->ptr,port,NULL);
+    2673
+    2674         /* It exists? Is actually a master? Is subjectively down? It's down.
+    2675          * Note: if we are in tilt mode we always reply with "0". */
+    2676         if (!sentinel.tilt && ri && (ri->flags & SRI_S_DOWN) &&
+    2677                                     (ri->flags & SRI_MASTER))
+    2678             isdown = 1;
+    2679
+    2680         /* Vote for the master (or fetch the previous vote) if the request
+    2681          * includes a runid, otherwise the sender is not seeking for a vote. */
+    2682         if (ri && ri->flags & SRI_MASTER && strcasecmp(c->argv[5]->ptr,"*")) {
+    2683             leader = sentinelVoteLeader(ri,(uint64_t)req_epoch,
+    2684                                             c->argv[5]->ptr,
+    2685                                             &leader_epoch);
+    2686         }
+    2687
+    2688         /* Reply with a three-elements multi-bulk reply:
+    2689          * down state, leader, vote epoch. */
+    2690         addReplyMultiBulkLen(c,3);
+    2691         addReply(c, isdown ? shared.cone : shared.czero);
+    2692         addReplyBulkCString(c, leader ? leader : "*");
+    2693         addReplyLongLong(c, (long long)leader_epoch);
+    ```
 
-- 对于c->argv[4],<current-epoch>这个参数，被用来填充req_epoch这个变量。但是由于
-strcasecmp(c->argv[5]->ptr,"*")为0的原因，填充后的req_epoch并没有派上用场。
+    - 对于c->argv[4],<current-epoch>这个参数，被用来填充req_epoch这个变量。但是由于
+    strcasecmp(c->argv[5]->ptr,"*")为0的原因，填充后的req_epoch并没有派上用场。
 
-- 同样由于strcasecmp(c->argv[5]->ptr,"*")为0的原因，leader_epoch并不会被填充,
-leader也会不被赋值，所以addReplyLongLong返回的leader_epoch又是无意义的初始值。
+    - 同样由于strcasecmp(c->argv[5]->ptr,"*")为0的原因，leader_epoch并不会被填充,
+    leader也会不被赋值，所以addReplyLongLong返回的leader_epoch又是无意义的初始值。
 
-- **另外从此处可以看到sentinel instance对于未知的master的另外一部分处理逻辑，会用is-master-down-by-addr的
-<ip> <port>去当前sentinel.masters去找，如果没找到，则isdown永远为0，即对该master 是否down掉并不表达。**
-当然如果是已知的master，并且该master sentinelRedisInstance处于SRI_S_DOWN状态，则回复isdown为1，表达自己对
-master instance的sdown的判断。
+    - **另外从此处可以看到sentinel instance对于未知的master的另外一部分处理逻辑，会用is-master-down-by-addr的
+    <ip> <port>去当前sentinel.masters去找，如果没找到，则isdown永远为0，即对该master是否down掉并不表达意见。**
+    当然如果是已知的master，并且该master sentinelRedisInstance处于SRI_S_DOWN状态，则回复isdown为1，表达出自己
+    已有的对master instance的SRI_S_DOWN状态的判断。
 
-再来看一下，此阶段收到other sentinel的reply之后的callback逻辑。
+    再来看一下，此阶段当前sentinel收到other sentinel的reply之后的callback逻辑。
 
-```
-/* src/sentinel.c */
-3148 /* Receive the SENTINEL is-master-down-by-addr reply, see the
-3149  * sentinelAskMasterStateToOtherSentinels() function for more information. */
-3150 void sentinelReceiveIsMasterDownReply(redisAsyncContext *c, void *reply, void *privdata) {
-3151     sentinelRedisInstance *ri = c->data;
-3152     redisReply *r;
-3153     REDIS_NOTUSED(privdata);
-3154
-3155     if (ri) ri->pending_commands--;
-3156     if (!reply || !ri) return;
-3157     r = reply;
-3158
-3159     /* Ignore every error or unexpected reply.
-3160      * Note that if the command returns an error for any reason we'll
-3161      * end clearing the SRI_MASTER_DOWN flag for timeout anyway. */
-3162     if (r->type == REDIS_REPLY_ARRAY && r->elements == 3 &&
-3163         r->element[0]->type == REDIS_REPLY_INTEGER &&
-3164         r->element[1]->type == REDIS_REPLY_STRING &&
-3165         r->element[2]->type == REDIS_REPLY_INTEGER)
-3166     {
-3167         ri->last_master_down_reply_time = mstime();
-3168         if (r->element[0]->integer == 1) {
-3169             ri->flags |= SRI_MASTER_DOWN;
-3170         } else {
-3171             ri->flags &= ~SRI_MASTER_DOWN;
-3172         }
-3185     }
-3186 }
-```
+    ```
+    /* src/sentinel.c */
+    3148 /* Receive the SENTINEL is-master-down-by-addr reply, see the
+    3149  * sentinelAskMasterStateToOtherSentinels() function for more information. */
+    3150 void sentinelReceiveIsMasterDownReply(redisAsyncContext *c, void *reply, void *privdata) {
+    3151     sentinelRedisInstance *ri = c->data;
+    3152     redisReply *r;
+    3153     REDIS_NOTUSED(privdata);
+    3154
+    3155     if (ri) ri->pending_commands--;
+    3156     if (!reply || !ri) return;
+    3157     r = reply;
+    3158
+    3159     /* Ignore every error or unexpected reply.
+    3160      * Note that if the command returns an error for any reason we'll
+    3161      * end clearing the SRI_MASTER_DOWN flag for timeout anyway. */
+    3162     if (r->type == REDIS_REPLY_ARRAY && r->elements == 3 &&
+    3163         r->element[0]->type == REDIS_REPLY_INTEGER &&
+    3164         r->element[1]->type == REDIS_REPLY_STRING &&
+    3165         r->element[2]->type == REDIS_REPLY_INTEGER)
+    3166     {
+    3167         ri->last_master_down_reply_time = mstime();
+    3168         if (r->element[0]->integer == 1) {
+    3169             ri->flags |= SRI_MASTER_DOWN;
+    3170         } else {
+    3171             ri->flags &= ~SRI_MASTER_DOWN;
+    3172         }
+    3185     }
+    3186 }
+    ```
 
-在此阶段，sentinelReceiveIsMasterDownReply的用途就仅仅只是用来收集上面提到的reply响应的isdown信息，并记录
-到master sentinelRedisInstance的SRI_MASTER_DOWN中。
+    在此阶段，sentinelReceiveIsMasterDownReply的用途就仅仅只是用来收集上面提到的reply响应的isdown信息，
+    并记录到该master sentinelRedisInstance下相应的sentinel sentinelRedisInstance的SRI_MASTER_DOWN中。
+    并且更新了该sentinel sentinelRedisInstance的ri->last_master_down_reply_time属性。
 
-可以看出来此阶段通过is-master-down-by这个命令沟通的信息有限。
+    可以看出来此阶段通过is-master-down-by这个命令沟通的信息有限。
 
 - 发起start failover
-如果该master sentinelRedisInstance处于SRI_O_DOWN状态，则会进入sentinelStartFailover的流程。
 
-```
-/* src/sentinel.c */
-3460 void sentinelStartFailover(sentinelRedisInstance *master) {
-3461     redisAssert(master->flags & SRI_MASTER);
-3462
-3463     master->failover_state = SENTINEL_FAILOVER_STATE_WAIT_START;
-3464     master->flags |= SRI_FAILOVER_IN_PROGRESS;
-3465     master->failover_epoch = ++sentinel.current_epoch;
-3471     master->failover_start_time = mstime()+rand()%SENTINEL_MAX_DESYNC;
-```
+    如果该master sentinelRedisInstance处于SRI_O_DOWN状态，则会进入sentinelStartFailover的流程。
 
-可以看到此处涉及两个epoch, 首选将++global sentinel current_epoch++，并赋给了需要failover的master sentinelRedisInstance的failover_epoch
-此处更新了master->failover_start_time,此处就是failover_start_time的一处更新逻辑。并且更新时伴随着rand()%SENTINEL_MAX_DESYNC的逻辑。
-此处也是sentinel.current_epoch的更新逻辑,是当前sentinel发起的一次主动更新逻辑。
+    ```
+    /* src/sentinel.c */
+    3460 void sentinelStartFailover(sentinelRedisInstance *master) {
+    3461     redisAssert(master->flags & SRI_MASTER);
+    3462
+    3463     master->failover_state = SENTINEL_FAILOVER_STATE_WAIT_START;
+    3464     master->flags |= SRI_FAILOVER_IN_PROGRESS;
+    3465     master->failover_epoch = ++sentinel.current_epoch;
+    3471     master->failover_start_time = mstime()+rand()%SENTINEL_MAX_DESYNC;
+    ```
+
+    - 可以看到此处涉及两个epoch, 首先将++global sentinel current_epoch++，并赋给了try-failover的
+    master sentinelRedisInstance的failover_epoch,
+
+    - 此处更新了master->failover_start_time,此处就是failover_start_time的一处更新逻辑,
+    并且更新时伴随着rand()%SENTINEL_MAX_DESYNC的逻辑。
+
+    - 此处sentinel.current_epoch的更新逻辑,是当前sentinel发起的一次主动更新逻辑。
 
 - start failover之后,sentinelAskMasterStateToOtherSentinels的更完整用途。
 
@@ -954,51 +1003,55 @@ master instance的sdown的判断。
     2693         addReplyLongLong(c, (long long)leader_epoch);
     ```
 
-    此处为other sentinel响应is-master-down-by-addr命令时，sentinelVoteLeader采用了作为参数的
-    当前sentinel的current_epoch,(也即为当前sentinel发起的这轮failover的failover_epoch)
+    此处为other sentinel响应is-master-down-by-addr命令时的vote逻辑，other sentinel执行sentinelVoteLeader采用了
+    作为参数的当前sentinel的current_epoch(也即为当前sentinel发起的这轮failover的failover_epoch),
     来评估自己的投票选择，评估二字为何，Vote for the master (or fetch the previous vote)就是解释。
-    可以看到此阶段此处other sentinel进入sentinelVoteLeader并不要求other sentinel对该master sentinelRedisInstance有除了role之外的任何要求。
-    此处会岔开去讲sentinelVoteLeader这个重头戏，等会会回过来将此阶段下，reply callback的逻辑。
+    可以看到此阶段此处other sentinel进入sentinelVoteLeader并不要求other sentinel对该
+    master sentinelRedisInstance有除了role之外的任何要求。
+
+    此处会岔开去讲sentinelVoteLeader这个重头戏，等会回过来头讲此阶段下当前sentinel的reply callback的逻辑。
 
 - other sentinel sentinelVoteLeader reply给当前sentinel
-接下来这一段内容中,我临时先将角度设身处地成other sentinel的角度，接下来的这段内容会临时将other sentinel称为当前sentinel。
-将other sentinel切换到第一人称视角。
 
-```
-/* src/sentinel.c */
-3243 char *sentinelVoteLeader(sentinelRedisInstance *master, uint64_t req_epoch, char *req_runid, uint64_t *leader_epoch) {
-3244     if (req_epoch > sentinel.current_epoch) {
-3249         sentinel.current_epoch = req_epoch;
-3253     }
-3254
-3255     if (master->leader_epoch < req_epoch && sentinel.current_epoch <= req_epoch)
-3256     {
-3257         mstime_t time_since_last_vote = mstime() - master->failover_start_time;
-3266         if (time_since_last_vote > master->failover_timeout ||
-3267             strcasecmp(req_runid,server.runid) == 0 ||
-3268             master->leader == NULL) {
-3269             sdsfree(master->leader);
-3270             master->leader = sdsnew(req_runid);
-3271         }
-3272         master->leader_epoch = sentinel.current_epoch;
-3276         /* If we did not voted for ourselves, set the master failover start
-3277          * time to now, in order to force a delay before we can start a
-3278          * failover for the same master. */
-3279         if (strcasecmp(master->leader,server.runid)) {
-3280             mstime_t last_time = master->failover_start_time;
-3281             master->failover_start_time = mstime()+rand()%SENTINEL_MAX_DESYNC;
-3286         }
-3287     }
-3288
-3289     *leader_epoch = master->leader_epoch;
-3290     return master->leader ? sdsnew(master->leader) : NULL;
-3291 }
-```
+    接下来这一段内容中,我临时设身处地成other sentinel的角度，接下来的这段内容会临时将other sentinel称为当前sentinel。
+    将other sentinel切换到第一人称视角。为了表达方便。
 
-    - 如果该req_epoch大于当前的sentinel.current_epoch,则更新sentinel.current_epoch。此处为更新sentinel.current_epoch的一个逻辑。
+    ```
+    /* src/sentinel.c */
+    3243 char *sentinelVoteLeader(sentinelRedisInstance *master, uint64_t req_epoch, char *req_runid, uint64_t *leader_epoch) {
+    3244     if (req_epoch > sentinel.current_epoch) {
+    3249         sentinel.current_epoch = req_epoch;
+    3253     }
+    3254
+    3255     if (master->leader_epoch < req_epoch && sentinel.current_epoch <= req_epoch)
+    3256     {
+    3257         mstime_t time_since_last_vote = mstime() - master->failover_start_time;
+    3266         if (time_since_last_vote > master->failover_timeout ||
+    3267             strcasecmp(req_runid,server.runid) == 0 ||
+    3268             master->leader == NULL) {
+    3269             sdsfree(master->leader);
+    3270             master->leader = sdsnew(req_runid);
+    3271         }
+    3272         master->leader_epoch = sentinel.current_epoch;
+    3276         /* If we did not voted for ourselves, set the master failover start
+    3277          * time to now, in order to force a delay before we can start a
+    3278          * failover for the same master. */
+    3279         if (strcasecmp(master->leader,server.runid)) {
+    3280             mstime_t last_time = master->failover_start_time;
+    3281             master->failover_start_time = mstime()+rand()%SENTINEL_MAX_DESYNC;
+    3286         }
+    3287     }
+    3288
+    3289     *leader_epoch = master->leader_epoch;
+    3290     return master->leader ? sdsnew(master->leader) : NULL;
+    3291 }
+    ```
 
-    - 如果master sentinelRedisInstance的leader_epoch小于该req_epoch并且sentinel.current_epoch不大于req_epoch,
-      其实可以看到由于上面的逻辑，根本没有小于的可能。
+    - 如果该req_epoch大于当前的sentinel.current_epoch,则更新当前sentinel的sentinel.current_epoch。
+    此处为被动更新sentinel.current_epoch的一个逻辑。
+
+    - 如果master sentinelRedisInstance的leader_epoch小于该req_epoch并且当前sentinel的sentinel.current_epoch
+    不大于req_epoch,其实可以看到由于上面的逻辑，根本没有小于的可能。
 
         - 上面两个条件满足则考虑更新该master sentinelRedisInstance的leader信息，
           将该req_runid参数赋给master sentinelRedisInstance的leader属性。
@@ -1007,42 +1060,43 @@ master instance的sdown的判断。
           此处就是failover_start_time的一个限制逻辑。
           则坚持上次的投票意见不变,例外就是投票给自己,投票给自己其实不是sentinelVoteLLeader在这个阶段的作用。
           投票给自己后续会解释。
-    
+
         - 更新master->leader_epoch为当前的sentinel.current_epoch
 
         - 并且如果我们并不是投票给了自己，则还有一个约束条件就是去更新master->failover_start_time,
           限制自己下次vote或者start failover的时间。此处就是failover_start_time的一个更新逻辑，当然会影响限制逻辑。
           可以看到更新failover_start_time伴随着一个rand()%SENTINEL_MAX_DESYNC的逻辑。这是一个比较无力的failover_start_time的desync逻辑。
-          至此，failover_start_time的两处更新逻辑以及一处限制逻辑都已经讲到了，并且两处更新failover_start_time都伴随着一个rand()%SENTINEL_MAX_DESYNC的逻辑.
+          至此，failover_start_time的两处更新逻辑以及一处限制逻辑都已经讲到了，并且两处
+          更新failover_start_time都伴随着一个rand()%SENTINEL_MAX_DESYNC的逻辑.
 
-        - failover_start_time的最后一处限制逻辑,之前讲过了。
+        - 刚好提一下failover_start_time的最后一处限制逻辑。
 
-        ```
-        /* src/sentinel.c */
-        3491 int sentinelStartFailoverIfNeeded(sentinelRedisInstance *master) {
-        3500     /* Last failover attempt started too little time ago? */
-        3501     if (now - master->failover_start_time <
-        3502         master->failover_timeout*2)
-        3503     {
-        3504         if (master->failover_delay_logged != master->failover_start_time) {
-        3505             time_t clock = (master->failover_start_time +
-        3506                             master->failover_timeout*2) / 1000;
-        3507             char ctimebuf[26];
-        3508
-        3509             ctime_r(&clock,ctimebuf);
-        3510             ctimebuf[24] = '\0'; /* Remove newline. */
-        3511             master->failover_delay_logged = master->failover_start_time;
-        3512             redisLog(REDIS_WARNING,
-        3513                 "Next failover delay: I will not start a failover before %s",
-        3514                 ctimebuf);
-        3515         }
-        3516         return 0;
-        ```
-        
-        此处是start failover if needed的一个前置条件，如果距离上次更新该master sentinelRedisInstance的failover_start_time
-        还没超过2倍failover_timeout,则直接return，则暂时不进入start failover.
-        
-    - 最后通过return值，以及填充leader_epoch参数的方式，将此次投票信息返回出去。
+            ```
+            /* src/sentinel.c */
+            3491 int sentinelStartFailoverIfNeeded(sentinelRedisInstance *master) {
+            3500     /* Last failover attempt started too little time ago? */
+            3501     if (now - master->failover_start_time <
+            3502         master->failover_timeout*2)
+            3503     {
+            3504         if (master->failover_delay_logged != master->failover_start_time) {
+            3505             time_t clock = (master->failover_start_time +
+            3506                             master->failover_timeout*2) / 1000;
+            3507             char ctimebuf[26];
+            3508
+            3509             ctime_r(&clock,ctimebuf);
+            3510             ctimebuf[24] = '\0'; /* Remove newline. */
+            3511             master->failover_delay_logged = master->failover_start_time;
+            3512             redisLog(REDIS_WARNING,
+            3513                 "Next failover delay: I will not start a failover before %s",
+            3514                 ctimebuf);
+            3515         }
+            3516         return 0;
+            ```
+
+            此处是start failover if needed的一个前置条件，如果距离上次更新该master sentinelRedisInstance的failover_start_time
+            还没超过2倍failover_timeout,则直接return，则暂时不进入start failover.
+
+    - 最后通过return值以及填充leader_epoch参数的这俩个方式，将此次投票信息返回出去。
 
     整个过程就是将同意发起start failover的sentinel instance在is-master-down-by-addr在参数中带上的current_epoch信息，即req_epoch参数。
     为什么同意呢，因为当前sentinel中该master sentinelRedisInstance的leader_epoch小于该值，并且当前sentinel的current_epoch还没有
