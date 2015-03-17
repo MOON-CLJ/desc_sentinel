@@ -1366,13 +1366,13 @@ sentinel与redis instance之间都会有的交互方式，但是具体交互方�
 
     可以看到此处有几个更新逻辑。
 
-        - 如果hello msg 的current_epoch,大于sentinel.current_epoch，则更新sentinel.current_epoch，
-        这里是sentinel.current_epoch被动更新的又一处逻辑。此处也就是current_epoch的最后一处更新逻辑.
+    - 如果hello msg 的current_epoch,大于sentinel.current_epoch，则更新sentinel.current_epoch，
+    这里是sentinel.current_epoch被动更新的又一处逻辑。此处也就是current_epoch的最后一处更新逻辑.
 
-        - 如果hello msg的master_config_epoch大于master->config_epoch，则此处更新master->config_epoch
+    - 如果hello msg的master_config_epoch大于master->config_epoch，则此处更新master->config_epoch
 
-        - 在master config_epoch变更的情况下，如果master ip port和当前不匹配，则做
-        sentinelResetMasterAndChangeAddress切换更新master info。
+    - 在master config_epoch变更的情况下，如果master ip port和当前不匹配，则做
+    sentinelResetMasterAndChangeAddress切换更新master info。
 
 - other sentinel在获取该hello msg之后，以及当前sentinel在准备好switch状态后，共用一个逻辑sentinelResetMaster
 
