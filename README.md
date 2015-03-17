@@ -29,10 +29,16 @@
 
     - maestro项目简介
 
-    - 链接泄露，pid耗尽 
+    - 链接泄露，pid耗尽
 
 - **现有方案的不足**
 
 - **附录**
 
     - 报告的角色与当前sentinel的看法不匹配
+
+    - SRI_MASTER SRI_SLAVE 这两个flag之间会切换么
+
+    - redis master instance是在什么时候重新config的
+
+    - failover过程中old master被重启会有什么影响

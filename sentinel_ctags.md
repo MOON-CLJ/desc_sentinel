@@ -1,4 +1,8 @@
-ctags -nux src/sentinel.c
+## sentinel ctags
+-----------------
+
+此处用ctags -nux src/sentinel.c生成了以下列表,并对以此文档涉及的内容进行了勾选，
+可以看到此文档已经覆盖了至少sentinel.c的大部分内容。
 
 - [x] REDIS_SENTINEL_PORT macro        43 src/sentinel.c   #define REDIS_SENTINEL_PORT 26379
 
