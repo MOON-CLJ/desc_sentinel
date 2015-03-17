@@ -182,6 +182,8 @@ sentinelCheckSubjectivelyDown的后半部就是认定或者取消SRI_S_DOWN的�
 
     - 如果+sdown的条件不满足，则检查SRI_S_DOWN并撤销SRI_S_DOWN状态，并输出-sdown标记。
 
+> 田老师提到过的，将slave当做master来monitor，应该就是此处的master slave role信息不吻合的情况。
+
 SRI_S_DOWN标记只在以上两种情况下更新，也就是说这两个状态之间是来回切换的，
 不会有连续两次认定SRI_S_DOWN状态，也不会连续两次撤消SRI_S_DOWN状态。
 
