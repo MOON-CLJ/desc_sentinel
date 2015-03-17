@@ -500,7 +500,7 @@ sentinel与redis instance之间都会有的交互方式，但是具体交互方�
 
     至此关于当前sentinel instance send hello msg以及send hello msg callback已经讲完了.
 
-- **但是other sentinel instance怎么收到hello msg以及怎么处理hello msg还没有讲，接下来讲一下对hello msg的响应**
+- **但是other sentinel instance怎么收到hello msg以及怎么处理hello msg还没有讲**
 
     ```
     /* src/sentinel.c */
@@ -549,13 +549,13 @@ sentinel与redis instance之间都会有的交互方式，但是具体交互方�
 
         有几个逻辑，
 
-            - sentinelReceiveHelloMessages在检查reply合法性之前，即只要有reply，则更新ri->pc_last_activity,
-              ri->pc_last_activity主要是用于判断pc连接是否需要reconnect的。如果距离上次更新ri->pc_last_activity
-              超过3倍SENTINEL_PUBLISH_PERIOD则需要重连。这也就是pc_last_activity的全部作用。
+        - sentinelReceiveHelloMessages在检查reply合法性之前，即只要有reply，则更新ri->pc_last_activity,
+          ri->pc_last_activity主要是用于判断pc连接是否需要reconnect的。如果距离上次更新ri->pc_last_activity
+          超过3倍SENTINEL_PUBLISH_PERIOD则需要重连。这也就是pc_last_activity的全部作用。
 
-            - 如果该hello msg是当前sentinel发出去的，则也忽略。
+        - 如果该hello msg是当前sentinel发出去的，则也忽略。
 
-            - 最后处理hello msg的函数是sentinelProcessHelloMessage，后续会详细解释。
+        - 最后处理hello msg的函数是sentinelProcessHelloMessage，后续会详细解释。
 
     - 那么直接发送给other sentinel instance的hello msg消息，other sentinel是怎么处理的呢?
 
