@@ -1053,23 +1053,27 @@ master->sentinels中删除重复的sentinel sentinelRedisInstance(如果相应�
     - 如果master sentinelRedisInstance的leader_epoch小于该req_epoch并且当前sentinel的sentinel.current_epoch
     不大于req_epoch,其实可以看到由于上面的逻辑，根本没有小于的可能。
 
-        - 上面两个条件满足则考虑更新该master sentinelRedisInstance的leader信息，
-          将该req_runid参数赋给master sentinelRedisInstance的leader属性。
-          例外就是如果距离该master sentinelRedisInstance
-          的failover_start_time还没有超过failover_timeout这么长时间，
-          此处就是failover_start_time的一个限制逻辑。
-          则坚持上次的投票意见不变,例外就是投票给自己,投票给自己其实不是sentinelVoteLLeader在这个阶段的作用。
-          投票给自己后续会解释。
+    如果上面两个条件满足，则,
 
-        - 更新master->leader_epoch为当前的sentinel.current_epoch
+    - 上面两个条件满足则考虑更新该master sentinelRedisInstance的leader信息，
+      将该req_runid参数赋给master sentinelRedisInstance的leader属性。
+      例外就是如果距离该master sentinelRedisInstance的failover_start_time还没有超过failover_timeout这么长时间，
+      此处就是failover_start_time的一个限制逻辑。
+      则坚持上次的投票意见不变,例外就是投票给自己,投票给自己其实不是sentinelVoteLLeader在这个阶段的作用。
+      投票给自己后续阶段会解释。
 
-        - 并且如果我们并不是投票给了自己，则还有一个约束条件就是去更新master->failover_start_time,
-          限制自己下次vote或者start failover的时间。此处就是failover_start_time的一个更新逻辑，当然会影响限制逻辑。
-          可以看到更新failover_start_time伴随着一个rand()%SENTINEL_MAX_DESYNC的逻辑。这是一个比较无力的failover_start_time的desync逻辑。
-          至此，failover_start_time的两处更新逻辑以及一处限制逻辑都已经讲到了，并且两处
-          更新failover_start_time都伴随着一个rand()%SENTINEL_MAX_DESYNC的逻辑.
+    - 更新master->leader_epoch为当前的sentinel.current_epoch
 
-        - 刚好提一下failover_start_time的最后一处限制逻辑。
+    - 并且如果我们并不是投票给了自己，则还有一个约束条件就是去更新master->failover_start_time,
+      限制自己下次vote或者start failover的时间。此处就是failover_start_time的一个更新逻辑，
+      可以看到更新failover_start_time伴随着一个rand()%SENTINEL_MAX_DESYNC的逻辑。
+      这是一个比较无力的failover_start_time的desync逻辑。
+      至此，failover_start_time的两处更新逻辑以及一处限制逻辑都已经讲到了，并且两处
+      更新failover_start_time都伴随着一个rand()%SENTINEL_MAX_DESYNC的逻辑.
+
+    - 刚好提一下failover_start_time的其他限制逻辑。
+
+        - 此处是sentinelStartFailoverIfNeededs的一个前置条件
 
             ```
             /* src/sentinel.c */
@@ -1093,16 +1097,44 @@ master->sentinels中删除重复的sentinel sentinelRedisInstance(如果相应�
             3516         return 0;
             ```
 
-            此处是start failover if needed的一个前置条件，如果距离上次更新该master sentinelRedisInstance的failover_start_time
-            还没超过2倍failover_timeout,则直接return，则暂时不进入start failover.
+            此处是sentinelStartFailoverIfNeededs的一个前置条件，如果距离上次更新该
+            master sentinelRedisInstance的failover_start_time还没超过2倍failover_timeout,则直接return，
+            则暂时不进入start failover.
+
+
+        - 参与sentinelFailoverWaitStart的election_timeout逻辑
+
+            ```
+            /* src/sentinel.c */
+            3632 /* ---------------- Failover state machine implementation ------------------- */
+            3633 void sentinelFailoverWaitStart(sentinelRedisInstance *ri) {
+            3651         /* Abort the failover if I'm not the leader after some time. */
+            3652         if (mstime() - ri->failover_start_time > election_timeout) {
+            3653             sentinelEvent(REDIS_WARNING,"-failover-abort-not-elected",ri,"%@ %llu",
+            3654                 (unsigned long long) ri->failover_epoch);
+            3655
+            3656             sentinelAbortFailover(ri);
+            ```
+
+    无论如何最终，
 
     - 最后通过return值以及填充leader_epoch参数的这俩个方式，将此次投票信息返回出去。
 
-    整个过程就是将同意发起start failover的sentinel instance在is-master-down-by-addr在参数中带上的current_epoch信息，即req_epoch参数。
-    为什么同意呢，因为当前sentinel中该master sentinelRedisInstance的leader_epoch小于该值，并且当前sentinel的current_epoch还没有
-    超前于该req_epoch,关于current_epoch更新的其他细节后续还会解释，
-    此处的current_epoch检查逻辑蔑视了比它小的req_epoch要求更新投票信息的请求，
-    则此时更新投票信息，包括该master sentinelRedisInstance的leader以及leader_epoch属性。
+    整个过程就是将同意发起start failover的sentinel instance在is-master-down-by-addr在参数中
+    带上的自身的++后的current_epoch信息，也即传递到other sentinel的sentinelVoteLeader调用时的req_epoch参数。
+    为什么同意呢，
+
+    - 因为当前sentinel中该master sentinelRedisInstance的leader_epoch小于该值，
+
+    - 并且当前sentinel的current_epoch还没有超前于该req_epoch,
+    此处的current_epoch检查逻辑蔑视了比它小的req_epoch要求更新投票信息的请求.
+
+    同意req_epoch的意思也就是，此时需要更新投票信息，包括该master sentinelRedisInstance的leader以及leader_epoch属性。
+
+    - leader信息不更新之前讲过特例，如果该master的leader距离上次变更还未超过一次failover_timeout的时间。
+
+    - leader_epoch更新就是为了避免在同一个leader_epoch下变更leader信息。
+
     至此临时的other sentinel的第一视角结束。
 
 - vote reply callback sentinelReceiveIsMasterDownReply的更完整的作用
