@@ -393,6 +393,7 @@ hello msg通过publish cmd不断向外send广播出去，
     config_epoch的的作用范围以及config_epoch每次变更是局限在一个master的范围内的.**
 
 继续来看sentinel给send hello msg这一PUBLISH async cmd注册的sentinelPublishReplyCallback函数。
+
 同样返回REDIS_ERR在sentinelSendHello表示async cmd根本就没有queued correctly。
 可以注意到的是，在sentinelSendHello里并没有直接更新ri->last_pub_time，
 更新是在sentinelPublishReplyCallback函数里完成的,
@@ -1139,67 +1140,67 @@ master->sentinels中删除重复的sentinel sentinelRedisInstance(如果相应�
 
 - vote reply callback sentinelReceiveIsMasterDownReply的更完整的作用
 
-Reply with a three-elements multi-bulk reply: down state, leader, vote epoch
+    Reply with a three-elements multi-bulk reply: down state, leader, vote epoch
 
-other sentinel vote reply信息中带上了leader以及vote epoch信息。
+    other sentinel vote reply信息中带上了leader以及vote epoch信息。
 
-```
-/* src/sentinel.c */
-3150 void sentinelReceiveIsMasterDownReply(redisAsyncContext *c, void *reply, void *privdata) {
-3151     sentinelRedisInstance *ri = c->data;
-3158
-3159     /* Ignore every error or unexpected reply.
-3160      * Note that if the command returns an error for any reason we'll
-3161      * end clearing the SRI_MASTER_DOWN flag for timeout anyway. */
-3162     if (r->type == REDIS_REPLY_ARRAY && r->elements == 3 &&
-3163         r->element[0]->type == REDIS_REPLY_INTEGER &&
-3164         r->element[1]->type == REDIS_REPLY_STRING &&
-3165         r->element[2]->type == REDIS_REPLY_INTEGER)
-3166     {
-3173         if (strcmp(r->element[1]->str,"*")) {
-3174             /* If the runid in the reply is not "*" the Sentinel actually
-3175              * replied with a vote. */
-3176             sdsfree(ri->leader);
-3182             ri->leader = sdsnew(r->element[1]->str);
-3183             ri->leader_epoch = r->element[2]->integer;
-3184         }
-3185     }
-3186 }
-```
+    ```
+    /* src/sentinel.c */
+    3150 void sentinelReceiveIsMasterDownReply(redisAsyncContext *c, void *reply, void *privdata) {
+    3151     sentinelRedisInstance *ri = c->data;
+    3158
+    3159     /* Ignore every error or unexpected reply.
+    3160      * Note that if the command returns an error for any reason we'll
+    3161      * end clearing the SRI_MASTER_DOWN flag for timeout anyway. */
+    3162     if (r->type == REDIS_REPLY_ARRAY && r->elements == 3 &&
+    3163         r->element[0]->type == REDIS_REPLY_INTEGER &&
+    3164         r->element[1]->type == REDIS_REPLY_STRING &&
+    3165         r->element[2]->type == REDIS_REPLY_INTEGER)
+    3166     {
+    3173         if (strcmp(r->element[1]->str,"*")) {
+    3174             /* If the runid in the reply is not "*" the Sentinel actually
+    3175              * replied with a vote. */
+    3176             sdsfree(ri->leader);
+    3182             ri->leader = sdsnew(r->element[1]->str);
+    3183             ri->leader_epoch = r->element[2]->integer;
+    3184         }
+    3185     }
+    3186 }
+    ```
 
-此处当前sentinel对other sentinel的投票信息的处理是将leader,leader_epoch信息,
-直接存入sentinel sentinelRedisInstance的leader和leader_epoch中。
-当然此处的sentinel sentinelRedisInstance是挂载在当前正在进行failover的master sentinelRedisInstance下。
-可以看到在当前sentinel以及other sentinel中对于leader和leader_epoch是存储在不同role的sentinelRedisInstance中的。
+    此处当前sentinel对other sentinel的投票信息的处理是将leader,leader_epoch信息,
+    直接存入sentinel sentinelRedisInstance的leader和leader_epoch中。
+    当然此处的sentinel sentinelRedisInstance是挂载在当前正在进行failover的master sentinelRedisInstance下。
+    可以看到在当前sentinel以及other sentinel中对于leader和leader_epoch是存储在不同role的sentinelRedisInstance中的。
 
 - start failover之后，正在开始failover的流程之前，叫做wait start failover
 
-```
-/* src/sentinel.c */
-3633 void sentinelFailoverWaitStart(sentinelRedisInstance *ri) {
-3634     char *leader;
-3635     int isleader;
-3636
-3637     /* Check if we are the leader for the failover epoch. */
-3638     leader = sentinelGetLeader(ri, ri->failover_epoch);
-3639     isleader = leader && strcasecmp(leader,server.runid) == 0;
-3640     sdsfree(leader);
-3641
-3644     if (!isleader && !(ri->flags & SRI_FORCE_FAILOVER)) {
-3645         int election_timeout = SENTINEL_ELECTION_TIMEOUT;
-3646
-3649         if (election_timeout > ri->failover_timeout)
-3650             election_timeout = ri->failover_timeout;
-3651         /* Abort the failover if I'm not the leader after some time. */
-3652         if (mstime() - ri->failover_start_time > election_timeout) {
-3656             sentinelAbortFailover(ri);
-3657         }
-3658         return;
-```
+    ```
+    /* src/sentinel.c */
+    3633 void sentinelFailoverWaitStart(sentinelRedisInstance *ri) {
+    3634     char *leader;
+    3635     int isleader;
+    3636
+    3637     /* Check if we are the leader for the failover epoch. */
+    3638     leader = sentinelGetLeader(ri, ri->failover_epoch);
+    3639     isleader = leader && strcasecmp(leader,server.runid) == 0;
+    3640     sdsfree(leader);
+    3641
+    3644     if (!isleader && !(ri->flags & SRI_FORCE_FAILOVER)) {
+    3645         int election_timeout = SENTINEL_ELECTION_TIMEOUT;
+    3646
+    3649         if (election_timeout > ri->failover_timeout)
+    3650             election_timeout = ri->failover_timeout;
+    3651         /* Abort the failover if I'm not the leader after some time. */
+    3652         if (mstime() - ri->failover_start_time > election_timeout) {
+    3656             sentinelAbortFailover(ri);
+    3657         }
+    3658         return;
+    ```
 
-可以看到此处会从当前sentinel来统计vote情况，上一步的vote reply已经存储在
-当前master sentinelRedisInstance挂载下的sentinel sentinelRedisInstance中了，
-如果选举失败，则此阶段最终会进入election timeout状态.
+    可以看到此处会从当前sentinel来统计vote情况，上一步的vote reply已经存储在
+    当前master sentinelRedisInstance挂载下的sentinel sentinelRedisInstance中了，
+    如果选举失败，则此阶段最终会进入election timeout状态.
 
 详细介绍一下sentinelGetLeader，
 
