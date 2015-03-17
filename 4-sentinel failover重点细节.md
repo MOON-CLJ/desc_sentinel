@@ -1053,7 +1053,7 @@ sentinel与redis instance之间都会有的交互方式，但是具体交互方�
     - 如果master sentinelRedisInstance的leader_epoch小于该req_epoch并且当前sentinel的sentinel.current_epoch
     不大于req_epoch,其实可以看到由于上面的逻辑，根本没有小于的可能。
 
-    如果上面两个条件满足，则,
+    如果上面两个条件满足则,
 
     - 上面两个条件满足则考虑更新该master sentinelRedisInstance的leader信息，
       将该req_runid参数赋给master sentinelRedisInstance的leader属性。
@@ -1131,9 +1131,11 @@ sentinel与redis instance之间都会有的交互方式，但是具体交互方�
 
     同意req_epoch的意思也就是，此时需要更新投票信息，包括该master sentinelRedisInstance的leader以及leader_epoch属性。
 
-    - leader信息不更新之前讲过特例，如果该master的leader距离上次变更还未超过一次failover_timeout的时间。
+    - leader信息不更新之前讲过特例，如果该master sentinelRedisInstance的leader距离上次变更还未超过一次failover_timeout的时间。
 
     - leader_epoch更新就是为了避免在同一个leader_epoch下变更leader信息。
+
+    **注意此处的leader和leader_epoch信息是存储在master sentinelRedisInstance中的。**
 
     至此临时的other sentinel的第一视角结束。
 
@@ -1167,12 +1169,13 @@ sentinel与redis instance之间都会有的交互方式，但是具体交互方�
     3186 }
     ```
 
-    此处当前sentinel对other sentinel的投票信息的处理是将leader,leader_epoch信息,
+    此处当前sentinel对other sentinel的投票reply信息的处理是将leader,leader_epoch信息,
     直接存入sentinel sentinelRedisInstance的leader和leader_epoch中。
     当然此处的sentinel sentinelRedisInstance是挂载在当前正在进行failover的master sentinelRedisInstance下。
-    可以看到在当前sentinel以及other sentinel中对于leader和leader_epoch是存储在不同role的sentinelRedisInstance中的。
+    **可以看到在当前sentinel以及other sentinel中对于leader和leader_epoch是
+    存储在不同role的sentinelRedisInstance中的。**
 
-- start failover之后，正在开始failover的流程之前，叫做wait start failover
+- start failover之后，正式开始failover的流程之前，叫做wait start failover,
 
     ```
     /* src/sentinel.c */
@@ -1197,178 +1200,193 @@ sentinel与redis instance之间都会有的交互方式，但是具体交互方�
     3658         return;
     ```
 
-    可以看到此处会从当前sentinel来统计vote情况，上一步的vote reply已经存储在
+    可以看到此处会从当前sentinel来统计vote情况，上一步的vote reply的vote信息已经存储在
     当前master sentinelRedisInstance挂载下的sentinel sentinelRedisInstance中了，
-    如果选举失败，则此阶段最终会进入election timeout状态.
+    如果选举一直失败，则此阶段过一段时间会进入election timeout状态.
 
-详细介绍一下sentinelGetLeader，
+    详细介绍一下sentinelGetLeader，
 
-先看前半部分，统计已有的vote,看是否有winner
+    - 先看前半部分，统计已有的vote,看是否有winner
 
-```
-3316 /* Scan all the Sentinels attached to this master to check if there                                                                                                                                   3317  * is a leader for the specified epoch.                                                                                                                                                               3318  *
-3319  * To be a leader for a given epoch, we should have the majority of
-3320  * the Sentinels we know (ever seen since the last SENTINEL RESET) that
-3321  * reported the same instance as leader for the same epoch. */
-/* src/sentinel.c */
-3322 char *sentinelGetLeader(sentinelRedisInstance *master, uint64_t epoch) {
-3333     counters = dictCreate(&leaderVotesDictType,NULL);
-3335     voters = dictSize(master->sentinels)+1; /* All the other sentinels and me. */
-3336
-3337     /* Count other sentinels votes */
-3338     di = dictGetIterator(master->sentinels);
-3339     while((de = dictNext(di)) != NULL) {
-3340         sentinelRedisInstance *ri = dictGetVal(de);
-3341         if (ri->leader != NULL && ri->leader_epoch == epoch) {
-3342             sentinelLeaderIncr(counters,ri->leader);
-3348         }
-3349     }
-3350     dictReleaseIterator(di);
-3351
-3355     di = dictGetIterator(counters);
-3356     while((de = dictNext(di)) != NULL) {
-3357         uint64_t votes = dictGetUnsignedIntegerVal(de);
-3358
-3359         if (votes > max_votes) {
-3360             max_votes = votes;
-3361             winner = dictGetKey(de);
-3362         }
-3363     }
-3364     dictReleaseIterator(di);
-```
+        ```
+        3316 /* Scan all the Sentinels attached to this master to check if there                                                                                                                                   3317  * is a leader for the specified epoch.                                                                                                                                                               3318  *
+        3319  * To be a leader for a given epoch, we should have the majority of
+        3320  * the Sentinels we know (ever seen since the last SENTINEL RESET) that
+        3321  * reported the same instance as leader for the same epoch. */
+        /* src/sentinel.c */
+        3322 char *sentinelGetLeader(sentinelRedisInstance *master, uint64_t epoch) {
+        3333     counters = dictCreate(&leaderVotesDictType,NULL);
+        3335     voters = dictSize(master->sentinels)+1; /* All the other sentinels and me. */
+        3336
+        3337     /* Count other sentinels votes */
+        3338     di = dictGetIterator(master->sentinels);
+        3339     while((de = dictNext(di)) != NULL) {
+        3340         sentinelRedisInstance *ri = dictGetVal(de);
+        3341         if (ri->leader != NULL && ri->leader_epoch == epoch) {
+        3342             sentinelLeaderIncr(counters,ri->leader);
+        3348         }
+        3349     }
+        3350     dictReleaseIterator(di);
+        3351
+        3355     di = dictGetIterator(counters);
+        3356     while((de = dictNext(di)) != NULL) {
+        3357         uint64_t votes = dictGetUnsignedIntegerVal(de);
+        3358
+        3359         if (votes > max_votes) {
+        3360             max_votes = votes;
+        3361             winner = dictGetKey(de);
+        3362         }
+        3363     }
+        3364     dictReleaseIterator(di);
+        ```
 
-可以看到此处就是all the Sentinels attached to this master
-统计这些sentinel sentinelRedisInstance的leader leader_epoch信息和参数given epoch是否吻合,
-并sentinelLeaderIncr累加到counters dict中。
-**这个given epoch其实就是master  sentinelRedisInstance的failover_epoch了，不一定是sentinel.current_epoch，
-可能此时当前sentinel的current_epoch已经由于接下来的failover又++了**
+        可以看到此处就是all the Sentinels attached to this master
+        统计这些sentinel sentinelRedisInstance的leader leader_epoch信息和given epoch参数是否吻合,
+        并sentinelLeaderIncr累加到counters dict中。
+        **这个given epoch其实就是master  sentinelRedisInstance的failover_epoch了，不一定是当前的sentinel.current_epoch，
+        可能此时当前sentinel的current_epoch已经由于当前failover接下来的failover又++了**
 
-接着开始统计counters这个dict,将投票最多的runid记录到winner中，将该投票记录到max_votes中.
+        接着开始统计counters这个dict,将投票最多的runid记录到winner中，将该投票记录到max_votes中.
 
-再看后半部分，统计已有的vote,看是否有winner
+    - 再看后半部分,统计已有的vote,看是否有winner
 
-```
-/* src/sentinel.c */
-3322 char *sentinelGetLeader(sentinelRedisInstance *master, uint64_t epoch) {
-3366     /* Count this Sentinel vote:
-3367      * if this Sentinel did not voted yet, either vote for the most
-3368      * common voted sentinel, or for itself if no vote exists at all. */
-3369     if (winner)
-3370         myvote = sentinelVoteLeader(master,epoch,winner,&leader_epoch);
-3371     else
-3372         myvote = sentinelVoteLeader(master,epoch,server.runid,&leader_epoch);
-3373
-3374     if (myvote && leader_epoch == epoch) {
-3375         uint64_t votes = sentinelLeaderIncr(counters,myvote);
-3376
-3377         if (votes > max_votes) {
-3378             max_votes = votes;
-3379             winner = myvote;
-3380         }
-3381     }
-3382
-3383     voters_quorum = voters/2+1;
-3384     if (winner && (max_votes < voters_quorum || max_votes < master->quorum))
-3385         winner = NULL;
-3386
-3387     winner = winner ? sdsnew(winner) : NULL;
-3388     sdsfree(myvote);
-3389     dictRelease(counters);
-3390     return winner;
-```
+        ```
+        /* src/sentinel.c */
+        3322 char *sentinelGetLeader(sentinelRedisInstance *master, uint64_t epoch) {
+        3366     /* Count this Sentinel vote:
+        3367      * if this Sentinel did not voted yet, either vote for the most
+        3368      * common voted sentinel, or for itself if no vote exists at all. */
+        3369     if (winner)
+        3370         myvote = sentinelVoteLeader(master,epoch,winner,&leader_epoch);
+        3371     else
+        3372         myvote = sentinelVoteLeader(master,epoch,server.runid,&leader_epoch);
+        3373
+        3374     if (myvote && leader_epoch == epoch) {
+        3375         uint64_t votes = sentinelLeaderIncr(counters,myvote);
+        3376
+        3377         if (votes > max_votes) {
+        3378             max_votes = votes;
+        3379             winner = myvote;
+        3380         }
+        3381     }
+        3382
+        3383     voters_quorum = voters/2+1;
+        3384     if (winner && (max_votes < voters_quorum || max_votes < master->quorum))
+        3385         winner = NULL;
+        3386
+        3387     winner = winner ? sdsnew(winner) : NULL;
+        3388     sdsfree(myvote);
+        3389     dictRelease(counters);
+        3390     return winner;
+        ```
 
-如果在统计中，有一个winner出现，则当前sentinel通过sentinelVoteLeader投给自己。
-当然如果当前sentinel已经sentinelVoteLeader过了，则此处不会算入,重复投票。
-此处并非之前给员外讲过的羊群效应，因为vote信息并没有广而告知，并没有广播传播。
-仅仅自己当前sentinel的一点私心而已,当然其实也是很慷慨的，如果有人已经赢得了时间获得了投票，
-至少他这一票肯定会投给他。
+        此处是sentinelVoteLeader的另外一个入口，
 
-最终统计vote情况，需要大于大多数，也需要大于master->quorum。此处也就是quorum的另外一处大多数统计的用途。
-如果不满足，则即使有winner也会被清空。
-此处sentinelGetLeader一次统计不成功，会再次统计，一直重试，直到SENTINEL_ELECTION_TIMEOUT,大概10s.
+        - 如果在统计中，没有一个winner出现，则当前sentinel通过sentinelVoteLeader投给自己。
+
+        - 当然如果当前sentinel已经sentinelVoteLeader给自己过了，则此处并不会重复计入counters,
+        counters是dict,这个dict的key就是sentinel instance的runid。
+
+        - 此处投票给自己并非之前给员外讲过的羊群效应，因为vote信息并没有广而告知，并没有在sentinel之间互相广播传播。
+        投票信息是从other sentienl往当前sentinel汇总的。仅仅算是当前sentinel的自己的一点私心而已.
+        当然其实也是很慷慨的，如果有other sentinel在当前sentinel
+        通过此处的sentinelVoteLeader逻辑投票之前已经赢得了时间获得了投票并且已经反馈到了当前sentinel，
+        至少当前sentinel这一票肯定会投给他。
+
+        - 最终统计vote情况，需要大于大多数，也需要大于master->quorum。此处也就是quorum的另外一处大多数统计的用途。
+        如果不满足，则即使有winner也会被清空。
+        此处sentinelGetLeader一次统计不成功，会再次统计，一直重试，直到SENTINEL_ELECTION_TIMEOUT,大概10s.
+
 关于leader以及leader_epoch上面大致已经介绍完了。
 
 - failover中SENTINEL_FAILOVER_STATE_WAIT_PROMOTION状态
 
-```
-/* src/sentinel.c */
-1790 void sentinelRefreshInstanceInfo(sentinelRedisInstance *ri, const char *info) {
-1945     if ((ri->flags & SRI_SLAVE) && role == SRI_MASTER) {
-1946         /* If this is a promoted slave we can change state to the
-1947          * failover state machine. */
-1948         if ((ri->flags & SRI_PROMOTED) &&
-1949             (ri->master->flags & SRI_FAILOVER_IN_PROGRESS) &&
-1950             (ri->master->failover_state ==
-1951                 SENTINEL_FAILOVER_STATE_WAIT_PROMOTION))
-1952         {
-1958             ri->master->config_epoch = ri->master->failover_epoch;
-1959             ri->master->failover_state = SENTINEL_FAILOVER_STATE_RECONF_SLAVES;
-```
+    ```
+    /* src/sentinel.c */
+    1790 void sentinelRefreshInstanceInfo(sentinelRedisInstance *ri, const char *info) {
+    1945     if ((ri->flags & SRI_SLAVE) && role == SRI_MASTER) {
+    1946         /* If this is a promoted slave we can change state to the
+    1947          * failover state machine. */
+    1948         if ((ri->flags & SRI_PROMOTED) &&
+    1949             (ri->master->flags & SRI_FAILOVER_IN_PROGRESS) &&
+    1950             (ri->master->failover_state ==
+    1951                 SENTINEL_FAILOVER_STATE_WAIT_PROMOTION))
+    1952         {
+    1958             ri->master->config_epoch = ri->master->failover_epoch;
+    1959             ri->master->failover_state = SENTINEL_FAILOVER_STATE_RECONF_SLAVES;
+    ```
 
-**可以看到当前sentinel的master sentinelRedisInstance的config_epoch被更新为master sentinelRedisInstance的
-failover_epoch,虽然是在借助slave sentinelRedisInstance的情况下完成的,
-但是此举也就是认定config upgrade的这一重要步骤。**
-此处master config_epoch upgrade之后，新的master config_epoch以及promoted slave的ip和port信息,以及当前sentinel.current_epoch就会不断
-通过send hello msg从当前sentinel广播出去，虽然当前sentinel都还未真正生效此变更，因为还不到当前sentinel变更的时候，
-可以解释为，此举之后当前sentinel的行为是不可逆的，一定要成功，即使真的crash了，那么这个upgrade config也由于
-广播出去了，会被其他sentinel最终fix生效。但是当前sentinel还需要做在之前的视角上做一些事情，所以还不到变更的时机。
+    - **可以看到当前sentinel的master sentinelRedisInstance的config_epoch被更新为master sentinelRedisInstance的
+    failover_epoch,虽然是在借助slave sentinelRedisInstance的情况下完成的,但是此举也就是认定config upgrade的这一重要步骤。**
+
+    - 此处master config_epoch upgrade之后，新的master config_epoch以及promoted slave的ip和port信息
+    以及当前sentinel.current_epoch就会不断通过send hello msg从当前sentinel广播出去，
+    虽然当前sentinel都还未真正生效此变更，因为还不到当前sentinel变更的时候，
+
+    - 可以解释为，此举之后当前sentinel的failover行为是不可逆的，一定要成功，即使当前sentinel真的crash了，
+    那么这个upgrade config也由于广播出去了，会被其他sentinel最终fix生效。(之前提到过一个非常小可能性的此处的特例。)
+    但是当前sentinel还需要在目前的视角上做一些事情，所以还不到变更的时机。
 
 - other sentinel收到hello msg的处理逻辑sentinelProcessHelloMessage
 
-```
-/* src/sentinel.c */
-2121 void sentinelProcessHelloMessage(char *hello, int hello_len) {
-2122     /* Format is composed of 8 tokens:
-2123      * 0=ip,1=port,2=runid,3=current_epoch,4=master_name,
-2124      * 5=master_ip,6=master_port,7=master_config_epoch. */
-2126     uint64_t current_epoch, master_config_epoch;
-2129
-2130     if (numtokens == 8) {
-2132         master = sentinelGetMasterByName(token[4]);
-2133         if (!master) goto cleanup; /* Unknown master, skip the message. */
-2134
-2135         /* First, try to see if we already have this sentinel. */
-2137         master_port = atoi(token[6]);
-2138         si = getSentinelRedisInstanceByAddrAndRunID(
-2139                         master->sentinels,token[0],port,token[2]);
-2140         current_epoch = strtoull(token[3],NULL,10);
-2141         master_config_epoch = strtoull(token[7],NULL,10);
-2168         /* Update local current_epoch if received current_epoch is greater.*/
-2169         if (current_epoch > sentinel.current_epoch) {
-2170             sentinel.current_epoch = current_epoch;
-2174         }
-2175
-2176         /* Update master info if received configuration is newer. */
-2177         if (master->config_epoch < master_config_epoch) {
-2178             master->config_epoch = master_config_epoch;
-2179             if (master_port != master->addr->port ||
-2180                 strcmp(master->addr->ip, token[5]))
-2181             {
-2182                 sentinelAddr *old_addr;
-2183
-2191                 old_addr = dupSentinelAddr(master->addr);
-2192                 sentinelResetMasterAndChangeAddress(master, token[5], master_port);
-```
+    ```
+    /* src/sentinel.c */
+    2121 void sentinelProcessHelloMessage(char *hello, int hello_len) {
+    2122     /* Format is composed of 8 tokens:
+    2123      * 0=ip,1=port,2=runid,3=current_epoch,4=master_name,
+    2124      * 5=master_ip,6=master_port,7=master_config_epoch. */
+    2126     uint64_t current_epoch, master_config_epoch;
+    2129
+    2130     if (numtokens == 8) {
+    2132         master = sentinelGetMasterByName(token[4]);
+    2133         if (!master) goto cleanup; /* Unknown master, skip the message. */
+    2134
+    2135         /* First, try to see if we already have this sentinel. */
+    2137         master_port = atoi(token[6]);
+    2138         si = getSentinelRedisInstanceByAddrAndRunID(
+    2139                         master->sentinels,token[0],port,token[2]);
+    2140         current_epoch = strtoull(token[3],NULL,10);
+    2141         master_config_epoch = strtoull(token[7],NULL,10);
+    2168         /* Update local current_epoch if received current_epoch is greater.*/
+    2169         if (current_epoch > sentinel.current_epoch) {
+    2170             sentinel.current_epoch = current_epoch;
+    2174         }
+    2175
+    2176         /* Update master info if received configuration is newer. */
+    2177         if (master->config_epoch < master_config_epoch) {
+    2178             master->config_epoch = master_config_epoch;
+    2179             if (master_port != master->addr->port ||
+    2180                 strcmp(master->addr->ip, token[5]))
+    2181             {
+    2182                 sentinelAddr *old_addr;
+    2183
+    2191                 old_addr = dupSentinelAddr(master->addr);
+    2192                 sentinelResetMasterAndChangeAddress(master, token[5], master_port);
+    ```
 
-可以看到此处有几个更新逻辑。
+    可以看到此处有几个更新逻辑。
 
-    - 如果hello msg 的current_epoch,大于sentinel.current_epoch，则更新sentinel.current_epoch，
-      这里是sentinel.current_epoch更新的有一处逻辑。此处也就是current_epoch的最后一处更新逻辑.
+        - 如果hello msg 的current_epoch,大于sentinel.current_epoch，则更新sentinel.current_epoch，
+        这里是sentinel.current_epoch被动更新的又一处逻辑。此处也就是current_epoch的最后一处更新逻辑.
 
-    - 如果hello msg的master_config_epoch大于master->config_epoch，则此处更新master->config_epoch
+        - 如果hello msg的master_config_epoch大于master->config_epoch，则此处更新master->config_epoch
 
-    - 在master config_epoch变更的情况下，如果master ip port和当前不匹配，则做sentinelResetMasterAndChangeAddress切换。
+        - 在master config_epoch变更的情况下，如果master ip port和当前不匹配，则做
+        sentinelResetMasterAndChangeAddress切换更新master info。
 
-- other sentinel在获取该hello msg之，以及当前sentinel在准备好switch状态后，sentinelResetMaster
-    
-    - sentinelResetMaster清空了master sentinelRedisInstance的leader信息。
+- other sentinel在获取该hello msg之后，以及当前sentinel在准备好switch状态后，共用一个逻辑sentinelResetMaster
+
+    - **sentinelResetMaster清空了master sentinelRedisInstance的leader信息。不保留已有的投票信息**
 
     - 将failover_start_time置为0，去掉了之前提到的failover_start_time的影响。
 
     - 将failover_state置为初始SENTINEL_FAILOVER_STATE_NONE值。
 
     - 清空了promoted_slave信息。
-    
-    - **关于epoch信息是完全保留的**,除该master sentinelRedisInstance的leader_epoch由于leader被清空以失效之外。
 
-    - sentinelResetMasterAndChangeAddress在sentinelResetMaster之后switch了master->addr
+    - **关于leader_epoch信息是完全保留的,小于等于该leader_epoch的vote请求不再会有
+    有意义的更新的vote信息返回,即返回null.**
+
+    - sentinelResetMasterAndChangeAddress在sentinelResetMaster之后立马switch了master->addr,更新了master info。
+
+至此，关于epoch和vote的细节解释完成。
