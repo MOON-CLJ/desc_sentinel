@@ -1,13 +1,17 @@
-##sentinel failover重点细节
---------------------------
+## **sentinel failover重点细节**
+--------------------------------
 
 ### **sentinel与redis, sentinel与sentinel instance之间的交互方式**
----------------------------------------------------------------------------------------
+------------------------------------------------------------------
 
-其实很简单，这些sentinel redis instance之间唯一的通信方式就是tcp网络通信，而目前由于sentinel的所有网络通信都是由redisAsyncCommand这个命令异步执行的。所以只要grep redisAsyncCommand即可list出所有操作。
+其实很简单，这些sentinel redis instance之间唯一的通信方式就是通过tcp通信，
+而目前由于sentinel的所有网络通信都是由redisAsyncCommand这个命令异步执行的,
+所以只要grep redisAsyncCommand即可list出所有操作。
 
 正如之前提到的，sentinel instance通过config file指定也好，runtime config也好，monitor管辖了很多
-所有master instance，对于这些master instance以及这些master的所有slave instance，每个instance建立了两个tcp连接，一个cc，一个pc。而与此同时，对于每个master instance而言，有其他的sentine也在monitor该master instance，sentinel一一与这些other sentinel建立一个cc连接。
+所有master instance，对于这些master instance以及这些master的所有slave instance，每个instance建立
+了两个tcp连接，一个cc，一个pc。而与此同时，对于每个master instance而言，有other sentine也在
+monitor该master instance，sentinel一一与这些other sentinel建立一个cc连接。
 
 先说建立连接时会用到的交互，这部分内容对sentinel与redis，sentinel与sentinel来讲，是通用的。
 
@@ -24,6 +28,7 @@
 ```
 
 与sentinelSendAuthIfNeeded相关的配置项如下,
+
 ```
 /* sentinel.conf */
 # sentinel auth-pass <master-name> <password>
@@ -46,15 +51,21 @@
 # sentinel auth-pass mymaster MySUPER--secret-0123passw0rd
 ```
 
-这段配置的含义是，如果要和sentinel配合使用，则master slave redis instance必须用相同的auth密码,
-所以即使这个配置文件只指定了master的的auth password，但是会自动扩散到slave instance，主要是为了配合这个做法。
+先定义一下bucket这个概念，一个redis master instance以及与他同步的所有redis slave instance这样一组
+redis instance称之为一个bucket.
+
+这段配置的含义是，即使这个配置文件只指定了master sentinelRedisInstance的auth passwd，
+但是会自动扩散到slave sentinelRedisInstance，主要是为了方便, 为了配合这个做法,才限制如果要和sentinel配合使用，
+则同属一个bucket的master和slave role的redis instance必须用相同的auth密码.
 也就可以看到*auth_pass = (ri->flags & SRI_MASTER) ? ri->auth_pass : ri->master->auth_pass;就是因为如此.
-可以看到此举是针对master 或者 slave role的sentinelRedisInstance执行的，而sentinelSendAuthIfNeeded在
-该sentinelRedisInstance为sentinel role时也会调用，并且此时会走ri->master->auth_pass的逻辑，那么通过
-sentinelSendAuthIfNeeded这个函数给sentinel instance发送ri->master->auth_pass auth信息，有用吗，
-会对sentinel instance产生什么影响。在这个这个问题很简单，因为sentinel在启动的时候加载了一个自定义的
+
+可以看到此举是针对master或者slave role的sentinelRedisInstance执行的，而sentinelSendAuthIfNeeded在
+该sentinelRedisInstance为sentinel role时也会调用，并且此时会走
+*auth_pass = (ri->flags & SRI_MASTER) ? ri->auth_pass : ri->master->auth_pass;后半部分的逻辑，那么通过
+sentinelSendAuthIfNeeded这个函数给sentinel instance发送ri->master->auth_pass auth信息，有用吗?
+会对sentinel instance产生什么影响。在这个问题很简单，因为sentinel instance在启动的时候加载了一个自定义的
 响应命令的子集sentinelcmds，这个sentinelcmds list里面根本就没有auth这个cmd，所以，auth命令发送给sentinel instance，
-会被直接无视,没有任何影响。
+会被直接无视,没有任何影响。后续会介绍sentinelcmds相关逻辑。
 
 ```
 /* src/sentinel.c */
@@ -70,13 +81,14 @@ sentinelSendAuthIfNeeded这个函数给sentinel instance发送ri->master->auth_p
 1697         "CLIENT SETNAME %s", name) == REDIS_OK)
 ```
 
-注释说的很清楚了，CLIENT SETNAME是让在远程redis instance,sentinel instance按照此命令参数指定的具有规则的名字来命名
-这些cc或者pc连接。以便可以通过grep相关pattern来筛选过滤CLIENT LIST.
+注释说的很清楚了，CLIENT SETNAME是让在remote redis instance或者sentinel instance按照此命令参数指定的具有规则的名字来命名
+这些cc或者pc连接。以便在这些instance上执行CLIENT LIST cmd获取到client list后，可以通过grep相关pattern来筛选过滤.
 **TODO, 由于sentinel长时间运行下，可以会产生连接泄露，也许是与某些配置项太小有关系,但是目前不清楚具体原因，希望通过
 CLIENT LIST来排查，但是还是上面这个sentinelcmds list子集的问题，需要sentinel同时加载CLIENT LIST,CLIENT SETNAME,
-才会让这个debug成为可能,所以其实现在CLIENT SETNAME cmd发送给sentinel instance，其实是被pass掉的**
+才会让debug成为可能,所以其实现在CLIENT SETNAME cmd发送给sentinel instance，其实是被pass掉的**
 
-然后sentinel对redis或者sentinel instance的ping操作以及sentinelPingReplyCallback中检查到instance处于BUSY状态时采取SCRIPT KILL操作，是通用的，
+然后sentinel对redis或者sentinel instance的ping操作以及sentinelPingReplyCallback中检查到instance处于
+BUSY状态时采取SCRIPT KILL操作，这部分内容对sentinel与redis，sentinel与sentinel来讲，也是通用的。
 
 ```
 /* src/sentinel.c */
@@ -94,91 +106,95 @@ CLIENT LIST来排查，但是还是上面这个sentinelcmds list子集的问题�
 2090                         "SCRIPT KILL") == REDIS_OK)
 ```
 
-除上面的对于sentinel与redis instance以及sentinel与sentinel instance之间通用的交互方式之外，接下来分开说一下，
+除了上面提到instance之间的通用的交互方式之外，接下来分开说一下不通用的部分，
+
 先说sentinel与redis instance之间的交互.
 
-sentinel与redis instance之间, 
+sentinel与redis instance之间,
 
-- 先说通过cc进行的。
+- 先说通过cc进行的,
 
     - info操作之前也讲过，是通过master或者slave role的sentinelRedisInstance的cc连接进行的。
 
-    ```
-    /* src/sentinel.c */
-    2344 void sentinelSendPeriodicCommands(sentinelRedisInstance *ri) {
-    2378     if ((ri->flags & SRI_SENTINEL) == 0 &&
-    2379         (ri->info_refresh == 0 ||
-    2380         (now - ri->info_refresh) > info_period))
-    2381     {
-    2382         /* Send INFO to masters and slaves, not sentinels. */
-    2383         retval = redisAsyncCommand(ri->cc,
-    2384             sentinelInfoReplyCallback, NULL, "INFO");
-    ```
+        ```
+        /* src/sentinel.c */
+        2344 void sentinelSendPeriodicCommands(sentinelRedisInstance *ri) {
+        2378     if ((ri->flags & SRI_SENTINEL) == 0 &&
+        2379         (ri->info_refresh == 0 ||
+        2380         (now - ri->info_refresh) > info_period))
+        2381     {
+        2382         /* Send INFO to masters and slaves, not sentinels. */
+        2383         retval = redisAsyncCommand(ri->cc,
+        2384             sentinelInfoReplyCallback, NULL, "INFO");
+        ```
 
-    - sentinelSendSlaveOf里有一个transaction，几个相关的命令在里面一并执行,这些命令会在master或者slave role的sentinelRedisInstance的cc连接上执行.
+    - sentinelSendSlaveOf里有一个transaction，几个相关的命令在里面一并执行,
+    这些命令会在master或者slave role的sentinelRedisInstance的cc连接上执行.
 
-    ```
-    /* src/sentinel.c */
-    3403 int sentinelSendSlaveOf(sentinelRedisInstance *ri, char *host, int port) {
-    3426     retval = redisAsyncCommand(ri->cc,
-    3427         sentinelDiscardReplyCallback, NULL, "MULTI");
-    3428     if (retval == REDIS_ERR) return retval;
-    3429     ri->pending_commands++;
-    3430
-    3431     retval = redisAsyncCommand(ri->cc,
-    3432         sentinelDiscardReplyCallback, NULL, "SLAVEOF %s %s", host, portstr);
-    3433     if (retval == REDIS_ERR) return retval;
-    3434     ri->pending_commands++;
-    3435
-    3436     retval = redisAsyncCommand(ri->cc,
-    3437         sentinelDiscardReplyCallback, NULL, "CONFIG REWRITE");
-    3438     if (retval == REDIS_ERR) return retval;
-    ```
+        ```
+        /* src/sentinel.c */
+        3403 int sentinelSendSlaveOf(sentinelRedisInstance *ri, char *host, int port) {
+        3426     retval = redisAsyncCommand(ri->cc,
+        3427         sentinelDiscardReplyCallback, NULL, "MULTI");
+        3428     if (retval == REDIS_ERR) return retval;
+        3429     ri->pending_commands++;
+        3430
+        3431     retval = redisAsyncCommand(ri->cc,
+        3432         sentinelDiscardReplyCallback, NULL, "SLAVEOF %s %s", host, portstr);
+        3433     if (retval == REDIS_ERR) return retval;
+        3434     ri->pending_commands++;
+        3435
+        3436     retval = redisAsyncCommand(ri->cc,
+        3437         sentinelDiscardReplyCallback, NULL, "CONFIG REWRITE");
+        3438     if (retval == REDIS_ERR) return retval;
+        ```
 
-- 再说通过pc进行的。
+- 再说通过pc进行的,
 
-    - master 或者slave role的sentinelRedisInstance的pc连接(这个连接就是从当前sentinel instance连接到远程的master 或者slave instance)创建之后，
-      不可忽略的一个重要操作就是SUBSCRIBE SENTINEL_HELLO_CHANNEL这个频道。
+    - master 或者slave role的sentinelRedisInstance的pc连接(这个连接就是从
+    当前sentinel instance连接到远程的master 或者slave instance)创建之后，
+    不可忽略的一个重要操作就是SUBSCRIBE SENTINEL_HELLO_CHANNEL这个频道。
 
-    ```
-    /* src/sentinel.c */
-    1706 void sentinelReconnectInstance(sentinelRedisInstance *ri) {
-    1735     if ((ri->flags & (SRI_MASTER|SRI_SLAVE)) && ri->pc == NULL) {
-    1757             retval = redisAsyncCommand(ri->pc,
-    1758                 sentinelReceiveHelloMessages, NULL, "SUBSCRIBE %s",
-    1759                     SENTINEL_HELLO_CHANNEL);
-    ```
+        ```
+        /* src/sentinel.c */
+        1706 void sentinelReconnectInstance(sentinelRedisInstance *ri) {
+        1735     if ((ri->flags & (SRI_MASTER|SRI_SLAVE)) && ri->pc == NULL) {
+        1757             retval = redisAsyncCommand(ri->pc,
+        1758                 sentinelReceiveHelloMessages, NULL, "SUBSCRIBE %s",
+        1759                     SENTINEL_HELLO_CHANNEL);
+        ```
 
-sentinel与sentinel instance之间,
+再说sentinel与sentinel instance之间,
 
-- 通过cc进行的。
+- 通过cc进行的,
 
     - 之前讲到过，sentinel与sentinel instance之间会通过在通向其他sentinel instance的cc连接上执行
-      SENTINEL is-master-down-by-addr命令来沟通master的S_DOWN状态，并且存储到本地other sentinel sentinelRedisInstance struct的SRI_MASTER_DOWN状态中.
-      供后续统计。
+      SENTINEL is-master-down-by-addr命令来沟通master的S_DOWN状态，
+      并且存储到本地other sentinel sentinelRedisInstance struct的SRI_MASTER_DOWN状态中,供后续统计。
 
-    ```
-    /* src/sentinel.c */
-    3193 void sentinelAskMasterStateToOtherSentinels(sentinelRedisInstance *master, int flags) {
-    3197     di = dictGetIterator(master->sentinels);
-    3198     while((de = dictNext(di)) != NULL) {
-    3199         sentinelRedisInstance *ri = dictGetVal(de);
-    3224         retval = redisAsyncCommand(ri->cc,
-    3225                     sentinelReceiveIsMasterDownReply, NULL,
-    3226                     "SENTINEL is-master-down-by-addr %s %s %llu %s",
-    3227                     master->addr->ip, port,
-    3228                     sentinel.current_epoch,
-    3229                     (master->failover_state > SENTINEL_FAILOVER_STATE_NONE) ?
-    3230                     server.runid : "*");
-    ```
+        ```
+        /* src/sentinel.c */
+        3193 void sentinelAskMasterStateToOtherSentinels(sentinelRedisInstance *master, int flags) {
+        3197     di = dictGetIterator(master->sentinels);
+        3198     while((de = dictNext(di)) != NULL) {
+        3199         sentinelRedisInstance *ri = dictGetVal(de);
+        3224         retval = redisAsyncCommand(ri->cc,
+        3225                     sentinelReceiveIsMasterDownReply, NULL,
+        3226                     "SENTINEL is-master-down-by-addr %s %s %llu %s",
+        3227                     master->addr->ip, port,
+        3228                     sentinel.current_epoch,
+        3229                     (master->failover_state > SENTINEL_FAILOVER_STATE_NONE) ?
+        3230                     server.runid : "*");
+        ```
 
 至此列出了几乎所有的的sentinel与redis instance之间以及sentinel与sentinel instance之间的交互方式，除了一个例外，
-下一章会讲一下，一个重要的但是比较特殊的交互方式, hello msg.
+下一章会讲一下，一个重要的但是比较特殊的交互方式, hello msg.可以简单的说，这其实还是一个sentinel与sentinel instance，
+sentinel与redis instance之间都会有的交互方式，但是具体交互方式又很不相同。
 
 ### **包含hello msg的细节**
------------------------------
+---------------------------
 
-先讲一下sentinel send hello msg的常规方式,
+先讲一下sentinel instance send hello msg的常规方式,
 
 ```
 /* src/sentinel.c */
@@ -201,7 +217,7 @@ sentinel与sentinel instance之间,
 ```
 
 可以看到sentinelSendHello的执行是随着sentinelHandleRedisInstance这个sentinelTimer定期执行逻辑执行的.
-作用于master,slave,sentinel三种role的sentinelRedisInstance的cc连接上，预计100ms一次。但是有个限制条件就是
+作用于三种role的sentinelRedisInstance的cc连接上，预计100ms一次。但是有个限制条件就是
 距离sentinel三种role的sentinelRedisInstance上次ri->last_pub_time更新已经超过SENTINEL_PUBLISH_PERIOD,
 SENTINEL_PUBLISH_PERIOD默认为2s.ri->last_pub_time后续马上会提到。
 
@@ -210,22 +226,27 @@ SENTINEL_PUBLISH_PERIOD默认为2s.ri->last_pub_time后续马上会提到。
 首先看一下hello msg的格式，
 
 > sentinel_ip,sentinel_port,sentinel_runid,current_epoch,
-  master_name,master_ip,master_port,master_config_epoch.
+> master_name,master_ip,master_port,master_config_epoch.
 
 可以看到这个用逗号分隔的msg里含有以下几种信息,
 
-- sentinel_ip,sentinel_port,sentinel_runid这些是关于当前sentinel的信息
+- sentinel_ip,sentinel_port,sentinel_runid这些都是广播关于当前sentinel的信息，让other sentinel发现自己的存在。
+注意到sentinel runid信息是间接给vote逻辑用的,但是hello msg跟vote逻辑没有直接关系。
 
 - current_epoch是在global sentinel struct里保存的一个全局epoch信息，后续会详细解释其用途。
 
-- master_name,master_ip,master_port是指当前三种role中任意role的sentinelRedisInstance对应的master sentinelRedisInstance config信息。
+- master_name,master_ip,master_port 之前提到过，此send hello msg的逻辑作用于三种role中任意role的sentinelRedisInstance上，
+所以此处的master_xx是指当任意role的sentinelRedisInstance对应的master sentinelRedisInstance的ip,port信息。
 
-- master_config_epoch是当前sentinelRedisInstance对应的master sentinelRedisInstance config epoch信息，这个epoch后续也会解释其用途。
+- master_config_epoch是当前sentinelRedisInstance对应的master sentinelRedisInstance的config_epoch信息，
+这个epoch后续也会解释其用途。
 
 有几个重要的问题值得提起，
 
-- 可以看到的是，这个hello msg实际上是将保存在当前sentinel的管辖下的master instance的本地映射master sentinelRedisInstance struct中的相关config信息,
-所以这些信息都是主观视角的信息，保证这些信息的有效性不在此处，这些master config信息及时被更新后续会提到。
+- 可以看到的是，这个hello msg的各个组成部分实际上是从master sentinelRedisInstance struct中获取的相关config信息,
+而这些master sentinelRedisInstance struct实际上是当前sentinel的管辖下的master instance到当前sentinel的env的映射而已,
+所以这些信息都是当前sentinel的主观视角的信息而已，保证这些信息的时效性不在此处.
+这些master config信息尽可能及时被更新的逻辑后续会提到。
 
 - hello msg是从本地的master slave sentinel 三种role的sentinelRedisInstance发起的，也就是说其实slave sentinel role的sentinelRedisInstance发起的
 hello msg其实是同对应的master role的sentinelRedisInstance的hello msg是重复的。但是注意渠道不一样，每个sentinelRedisInstance向外广播的渠道是这个
