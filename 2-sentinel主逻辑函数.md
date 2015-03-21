@@ -72,6 +72,7 @@ sentinelHandleRedisInstance里的每个函数都很有意思，后续章节会�
     - sentinelSendPeriodicCommands
 
 ### **sentinelReconnectInstance**
+---------------------------------
 
 首先介绍一下由sentinel所产生的tcp连接，以及tcp连接重连的机制。
 
@@ -267,6 +268,7 @@ ri->flags & (SRI_MASTER|SRI_SLAVE)来说，是指cc或者pc中任意一个处于
 对于ri->flags & SRI_SENTINEL来讲,是指cc处于未响应的状态。
 
 ### **sentinelSendPeriodicCommands**
+------------------------------------
 
 相关常量定义如下：
 

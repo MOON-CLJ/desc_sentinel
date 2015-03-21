@@ -1321,10 +1321,10 @@ sentinel与redis instance之间都会有的交互方式，但是具体交互方�
 
     - 此处master config_epoch upgrade之后，新的master config_epoch以及promoted slave的ip和port信息
     以及当前sentinel.current_epoch就会不断通过send hello msg从当前sentinel广播出去，
-    虽然当前sentinel都还未真正生效此变更，因为还不到当前sentinel变更的时候，
+    即使当前sentinel都还未真正生效此变更，因为还不到当前sentinel变更的时候，
 
     - 可以解释为，此举之后当前sentinel的failover行为是不可逆的，一定要成功，即使当前sentinel真的crash了，
-    那么这个upgrade config也由于广播出去了，会被其他sentinel最终fix生效。(之前提到过一个非常小可能性的此处的特例。)
+    那么这个upgrade config也由于广播出去了，会被其他sentinel最终fix生效。
     但是当前sentinel还需要在目前的视角上做一些事情，所以还不到变更的时机。
 
 - other sentinel收到hello msg的处理逻辑sentinelProcessHelloMessage
