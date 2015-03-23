@@ -13,7 +13,7 @@
 
 - **遇到过的sentinel failover过程的特例以及处理方式**
 
-- **sentinel现在的不足和可期待的改进**
+- **sentinel现在的不足以及可期待的改进**
 
 - **sentinel failover过程的各种pubsub message由来的详细介绍**
 
@@ -42,3 +42,5 @@
     - redis master instance是在什么时候重新config的
 
     - failover过程中old master被重启会有什么影响
+
+    - SENTINEL_MAX_DESYNC
