@@ -496,6 +496,7 @@ ri->leader后续会详细解释。SRI_MASTER_DOWN状态马上会介绍。
 
 - 第一个参数r->element[0]->integer是就是远程sentinel instance对master down状态的判断，
 所以直接存入该sentinel sentinelRedisInstance的SRI_MASTER_DOWN flag中。可以看到SRI_MASTER_DOWN的作用也仅仅在于此。
+也就是说SRI_MASTER_DOWN对于当前sentinel来讲是不生效的。
 
 - 另外可以看到第二个返回参数r->element[1]->str，如果不是返回的"\*"这样的一个字符的话，则表明是一个vote reply。
 对应的可以看到之前(master->failover_state > SENTINEL_FAILOVER_STATE_NONE) ? server.runid : "\*"这个请求时的
