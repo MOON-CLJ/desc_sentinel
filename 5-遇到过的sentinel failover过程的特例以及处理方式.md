@@ -3,25 +3,21 @@
 
 本章节希望记录一些我们预料之外的事情，sentinel的行为与我们的理解或者预料不一样的情况。
 
-**首先提一下，有一点分歧是，
+首先提一下，有一点分歧是，
 
-- 我们认为一个版本的epoch只有由一个sentinel来主导，并且
+- **我们认为一个版本的epoch只有由一个sentinel来主导，并且**
 
-- 一个master同一时刻只能有一个sentinel来failover，即使两个sentinel以不同的epoch的名义来
-failover也不行，
+- **一个master同一时刻只能有一个sentinel来failover，即使两个sentinel以不同的epoch的名义来
+failover也不行.**
 
 这两点其实是一点，这两个假设跟作者的理解是有分歧的。具体后续会提到.
 我们不接受作者的观点的原因是，因为我们更加谨慎，希望通过以上假设，致力于摒弃掉一些极端情况,
-以避免它们可能带来的不确定性.同时事实证明我们的担心并不是多余的。**
-
-### sentinelGetLeader
----------------------
-
-在sentinelGetLeader这个当前sentinel统计failover的master下的关于failover的leader的投票时
+以避免它们可能带来的不确定性.同时事实证明我们的担心并不是多余的。
 
 ### sentinelVoteLeader
 ----------------------
 
+https://github.com/antirez/redis/pull/2370
 这个问题在以下情况发生,
 
 - 假设master0 down掉了
@@ -53,6 +49,8 @@ master0但是是以不同的epoch进行的情况。
 后者则不可能在短时间内成为leader。
 
 ```
+/* src/sentinel.c */
+char *sentinelVoteLeader(sentinelRedisInstance *master, uint64_t req_epoch, char *req_runid, uint64_t *leader_epoch) {
      {
 -        sdsfree(master->leader);
 -        master->leader = sdsnew(req_runid);
@@ -64,3 +62,90 @@ master0但是是以不同的epoch进行的情况。
 +            master->leader = sdsnew(req_runid);
 +        }
 ```
+
+### sentinelGetLeader
+---------------------
+
+https://github.com/antirez/redis/pull/2230
+在sentinelGetLeader这个当前sentinel统计failover的master下的关于failover的leader的投票时,
+还会有一个同前面提到的sentinelVoteLeader的行为有关联的行为会不满足我们的假设。
+
+- 起因在于,
+
+    ```
+    /* src/sentinel.c */
+    3187 void sentinelAskMasterStateToOtherSentinels(sentinelRedisInstance *master, int flags) {
+    3218         retval = redisAsyncCommand(ri->cc,
+    3219                     sentinelReceiveIsMasterDownReply, NULL,
+    3220                     "SENTINEL is-master-down-by-addr %s %s %llu %s",
+    3221                     master->addr->ip, port,
+    3222                     sentinel.current_epoch,
+    3223                     (master->failover_state > SENTINEL_FAILOVER_STATE_NONE) ?
+    3224                     server.runid : "*");
+    ```
+
+    可以看到，对于一个已经开始的master的failover而言，SENTINEL is-master-down-by-addr命令中的
+    req_epoch部分是sentinel.current_epoch，即在等待elect这段时间内，req_epoch可能会不断随着sentinel.current_epoch
+    的增加而增加，而不再是failover开始时的与当初current_epoch相等的failover_epoch.
+
+- 争议点在于,
+
+    ```
+    /* src/sentinel.c */
+    3293 char *sentinelGetLeader(sentinelRedisInstance *master, uint64_t epoch) {
+    3308     /* Count other sentinels votes */
+    3309     di = dictGetIterator(master->sentinels);
+    3310     while((de = dictNext(di)) != NULL) {
+    3311         sentinelRedisInstance *ri = dictGetVal(de);
+    3312         if (ri->leader != NULL && ri->leader_epoch == sentinel.current_epoch)
+    3313             sentinelLeaderIncr(counters,ri->leader);
+    3314     }
+    ```
+
+    上面的sentinelAskMasterStateToOtherSentinels是当前sentinel向other sentinel发起的投票请求。
+    而sentinelGetLeader则是统计other sentinel的投票回应。
+    为了与上面的sentinelAskMasterStateToOtherSentinels中当前req_epoch随着sentinel.current_epoch不断增加
+    这一行为一致，统计的时候，sentinel的实现也是将other sentinel的ri->leader_epoch与sentinel.current_epoch
+    进行比较.
+
+所以就出现了以下情况，
+
+- sentinel0和sentinel1同时以相同的current_epoch比如说epoch 1开始对同一个比如说master0进行failover。
+
+- sentinel0获得了这一轮投票的大多数，然后正式对master0进行了failover。
+
+- sentinel1没有获得大多数投票，但是并没有因为立即停止对选票的追求，即try-failover此时并没有停止。
+而是等待10s的选举时间结束。
+
+- 但是sentinel1的运气很好，如果之前的sentinelVoteLeader在短时间内可以改变自己的投票选择的行为
+是被允许的话.
+
+- 因为在此种情况下，sentinel1的current_epoch增加之后比如说为2，即使master0的failover_epoch此时
+还是1,但是投票请求发出的req_epoch已经是2了，此时other sentinel收到master0下的新的req epoch 2的
+投票请求时，纷纷投给了sentinel1,并且反馈给sentinel1的leader_epoch也纷纷为2.
+
+- 而sentinel1此时还在为统计failover_epoch为1的master0的failover统计投票，看是否需要继续。但是恰好
+sentinelGetLeader统计投票时采用的是ri->leader_epoch == sentinel.current_epoch这样一个判定。
+而此时other sentinel的ri->leader_epoch都为2,sentinel1的sentinel.current_epoch也为2。
+所以如果投票大多数汇集到sentinel1上，则sentinel1的failover_epoch为1的master0的failover获得了
+other sentinel的投票肯定，得以继续。而注意到sentinel0在此之前也是以epoch为1进行的failover。这与我们的假设
+相悖。
+
+所以之前提到的sentinelVoteLeader的短时间内变换vote leader的行为如果被制止，此处发生这种情况的条件就会被砍掉一部分从而
+可以避免，但是与此同时sentinelGetLeader统计投票时用sentinel.current_epoch这个行为也有待商榷。
+如果让other sentinel的投票回应ri->leader_epoch与failover的failover_epoch相匹配，则可以避免上述问题。
+即使sentinelAskMasterStateToOtherSentinels
+还是采用sentinel.current_epoch作为req_epoch.
+
+```
+/* src/sentinel.c */
+-        if (ri->leader != NULL && ri->leader_epoch == sentinel.current_epoch)
++        if (ri->leader != NULL && ri->leader_epoch == epoch)
+```
+
+
+### 期待作者对于sentinel当前“poorly desynchronized”的现状进行改进
+-----------------------------------------------------------------
+
+从上面提到的两种情况可以看到，sentinel关于投票的实现还差一点火候，我们上面提到的投票的改动是尽量不做大的改动的情况下的
+临时之举，大的改动还是等待redis作者来实现吧。
