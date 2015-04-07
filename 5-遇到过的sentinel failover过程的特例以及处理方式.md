@@ -117,7 +117,7 @@ https://github.com/antirez/redis/pull/2230
 - sentinel1没有获得大多数投票，但是并没有因为立即停止对选票的追求，即try-failover此时并没有停止。
 而是等待10s的选举时间结束。
 
-- 但是sentinel1的运气很好，如果之前的sentinelVoteLeader在短时间内可以改变自己的投票选择的行为
+- 但是sentinel1的等待马上就会被证明是不是白费的，如果之前的sentinelVoteLeader在短时间内可以改变自己的投票选择的行为
 是被允许的话.
 
 - 因为在此种情况下，sentinel1的current_epoch增加之后比如说为2，即使master0的failover_epoch此时
@@ -134,8 +134,7 @@ other sentinel的投票肯定，得以继续。而注意到sentinel0在此之前
 所以之前提到的sentinelVoteLeader的短时间内变换vote leader的行为如果被制止，此处发生这种情况的条件就会被砍掉一部分从而
 可以避免，但是与此同时sentinelGetLeader统计投票时用sentinel.current_epoch这个行为也有待商榷。
 如果让other sentinel的投票回应ri->leader_epoch与failover的failover_epoch相匹配，则可以避免上述问题。
-即使sentinelAskMasterStateToOtherSentinels
-还是采用sentinel.current_epoch作为req_epoch.
+即使sentinelAskMasterStateToOtherSentinels还是采用sentinel.current_epoch作为req_epoch.
 
 ```
 /* src/sentinel.c */
