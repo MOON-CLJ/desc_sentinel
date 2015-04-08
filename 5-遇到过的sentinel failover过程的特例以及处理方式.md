@@ -151,6 +151,7 @@ other sentinel的投票肯定，得以继续。而注意到sentinel0在此之前
 
 
 ### 新的处理方式，放开对sentinel的限制
+-------------------------------------
 
 - 不同的sentinel可以以不同epoch对同一个master进行连续相邻的failover。
 
