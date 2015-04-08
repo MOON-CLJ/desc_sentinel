@@ -148,3 +148,15 @@ other sentinel的投票肯定，得以继续。而注意到sentinel0在此之前
 
 从上面提到的两种情况可以看到，sentinel关于投票的实现还差一点火候，我们上面提到的投票的改动是尽量不做大的改动的情况下的
 临时之举，大的改动还是等待redis作者来实现吧。
+
+
+### 新的处理方式，放开对sentinel的限制
+
+- 不同的sentinel可以以不同epoch对同一个master进行连续相邻的failover。
+
+- 不同的sentinel可以以相同的epoch对同一个master进行连续相邻的failover。
+
+- 一个sentinel一个epoch只能有一次failover,即只对应一个master。
+
+    在一个sentinel内部发起failover需要将全局的current_epoch++作为failover epoch,
+    即不同的master的failover之间需要去sentinel内部全局注册failover_epoch.
