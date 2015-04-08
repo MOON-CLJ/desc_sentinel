@@ -157,6 +157,8 @@ other sentinel的投票肯定，得以继续。而注意到sentinel0在此之前
 
 - 不同的sentinel可以以相同的epoch对同一个master进行连续相邻的failover。
 
+    即一个epoch可能有多个成功的由不同sentinel发起的failover，和多个失败的由不同sentinel发起的failover。
+
 - 一个sentinel一个epoch只能有一次failover,即只对应一个master。
 
     在一个sentinel内部发起failover需要将全局的current_epoch++作为failover epoch,
